@@ -4,7 +4,7 @@ import {
   RecentSessionRow,
 } from "@/lib/attendeaseTypes";
 import { getCheckerNameMap } from "@/lib/data/session-helpers";
-import { todayDateString } from "@/lib/format";
+import { manilaDayBounds, todayDateString } from "@/lib/format";
 import { CHECKER_ROLE } from "@/lib/constants";
 import { createClient, SupabaseServerClient } from "@/lib/supabase/server";
 
@@ -12,6 +12,8 @@ async function fetchDashboardStats(
   supabase: SupabaseServerClient,
   today: string
 ): Promise<DashboardStats> {
+  const { start, end } = manilaDayBounds(today);
+
   const [checkers, students, openSessions, scans] = await Promise.all([
     supabase
       .from("users")
@@ -27,8 +29,8 @@ async function fetchDashboardStats(
     supabase
       .from("attendance_logs")
       .select("id", { count: "exact", head: true })
-      .gte("scanned_at", `${today}T00:00:00`)
-      .lte("scanned_at", `${today}T23:59:59`),
+      .gte("scanned_at", start)
+      .lte("scanned_at", end),
   ]);
 
   return {

@@ -13,6 +13,7 @@ import {
   ReportSessionOption,
   ReportStats,
 } from "@/lib/data/report-utils";
+import { addDaysToDateString, todayDateString } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
 
 export type { ReportSessionOption, ReportStats };
@@ -41,17 +42,11 @@ export type ReportsPageData = {
   recordCountBySession: Record<string, number>;
 };
 
-function formatDateISO(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
 export function getDefaultReportDateRange(): { from: string; to: string } {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - 30);
+  const to = todayDateString();
   return {
-    from: formatDateISO(from),
-    to: formatDateISO(to),
+    from: addDaysToDateString(to, -30),
+    to,
   };
 }
 

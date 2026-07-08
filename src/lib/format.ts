@@ -3,25 +3,41 @@ import {
   AttendanceStatus,
   ResolvedAttendanceStatus,
 } from "@/lib/attendeaseTypes";
+import { APP_TIMEZONE } from "@/lib/constants";
+
+const dateTimeOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+  timeZone: APP_TIMEZONE,
+} as const;
+
+const dateOptions = {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: APP_TIMEZONE,
+} as const;
+
+const timeOptions = {
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+  timeZone: APP_TIMEZONE,
+} as const;
 
 export function formatDate(dateStr: string): string {
-  const date = new Date(`${dateStr}T00:00:00`);
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  const date = new Date(`${dateStr}T12:00:00+08:00`);
+  return date.toLocaleDateString("en-US", dateOptions);
 }
 
 export function formatTime(timeStr: string): string {
-  const [hours, minutes] = timeStr.split(":");
-  const date = new Date();
-  date.setHours(Number(hours), Number(minutes), 0);
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  const [hours, minutes, seconds = "0"] = timeStr.split(":");
+  const padded = `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}:${seconds.padStart(2, "0")}`;
+  const date = new Date(`1970-01-01T${padded}+08:00`);
+  return date.toLocaleTimeString("en-US", timeOptions);
 }
 
 export function formatTimeRange(start: string, end: string): string {
@@ -29,13 +45,7 @@ export function formatTimeRange(start: string, end: string): string {
 }
 
 export function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return new Date(iso).toLocaleString("en-US", dateTimeOptions);
 }
 
 export function formatDateTimeOrDash(iso: string | null | undefined): string {
@@ -110,9 +120,18 @@ export function attendanceStatusVariant(
 }
 
 export function todayDateString(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return new Date().toLocaleDateString("en-CA", { timeZone: APP_TIMEZONE });
+}
+
+export function addDaysToDateString(dateStr: string, days: number): string {
+  const anchor = new Date(`${dateStr}T12:00:00+08:00`);
+  anchor.setTime(anchor.getTime() + days * 24 * 60 * 60 * 1000);
+  return anchor.toLocaleDateString("en-CA", { timeZone: APP_TIMEZONE });
+}
+
+export function manilaDayBounds(dateStr: string): { start: string; end: string } {
+  return {
+    start: `${dateStr}T00:00:00+08:00`,
+    end: `${dateStr}T23:59:59.999+08:00`,
+  };
 }

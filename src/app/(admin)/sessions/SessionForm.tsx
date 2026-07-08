@@ -11,6 +11,7 @@ import {
   resolvePhaseTimes,
 } from "@/lib/sessionPhase";
 import { currentAcademicYear } from "@/lib/validations/student";
+import { todayDateString } from "@/lib/format";
 import { normalizeTimeForInput } from "@/lib/validations/session";
 
 const inputClass =
@@ -22,14 +23,6 @@ type SessionFormProps = {
   checkers: SessionCheckerOption[];
   onSubmit: (formData: FormData) => void;
 };
-
-function defaultDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 export function SessionForm({
   formId,
@@ -79,7 +72,7 @@ export function SessionForm({
           <input
             name="date"
             type="date"
-            defaultValue={session?.date ?? defaultDate()}
+            defaultValue={session?.date ?? todayDateString()}
             required
             className={inputClass}
           />
