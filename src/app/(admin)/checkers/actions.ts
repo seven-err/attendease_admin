@@ -2,6 +2,7 @@
 
 import { randomBytes } from "crypto";
 import { revalidatePath } from "next/cache";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { getAdminProfile } from "@/lib/auth";
 import { CHECKER_ROLE, CHECKER_DEPARTMENTS, SSG_LABEL } from "@/lib/constants";
@@ -70,12 +71,24 @@ export async function createChecker(
   }
 
   const tempPassword = generateTempPassword();
-  const supabase = await createClient();
 
-  const { data: authData, error: signUpError } = await supabase.auth.signUp({
-    email: parsed.email,
-    password: tempPassword,
-  });
+  let adminClient;
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return {
+      success: false,
+      error:
+        "Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to your environment variables.",
+    };
+  }
+
+  const { data: authData, error: signUpError } =
+    await adminClient.auth.admin.createUser({
+      email: parsed.email,
+      password: tempPassword,
+      email_confirm: true,
+    });
 
   if (signUpError || !authData.user) {
     return {
@@ -86,7 +99,7 @@ export async function createChecker(
 
   const userId = authData.user.id;
 
-  const { error: profileError } = await supabase.from("users").insert({
+  const { error: profileError } = await adminClient.from("users").insert({
     id: userId,
     full_name: parsed.full_name,
     email: parsed.email,
@@ -97,6 +110,7 @@ export async function createChecker(
   });
 
   if (profileError) {
+    await adminClient.auth.admin.deleteUser(userId);
     return {
       success: false,
       error: profileError.message ?? "Failed to create checker profile.",
