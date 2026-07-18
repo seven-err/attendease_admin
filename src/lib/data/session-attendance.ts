@@ -29,6 +29,26 @@ type AttendanceLogRow = {
   attendance_status: string;
 };
 
+type SessionScope = Pick<
+  AttendanceSession,
+  "department" | "course" | "year_level"
+>;
+
+const STUDENT_PAGE_SIZE = 1000;
+const STUDENT_ID_CHUNK_SIZE = 200;
+
+const STUDENT_ROSTER_SELECT = `
+  id,
+  student_number,
+  full_name,
+  student_academic_records (
+    department,
+    course,
+    year_level,
+    created_at
+  )
+`;
+
 function pickLatestAcademic(
   records: StudentRow["student_academic_records"]
 ): AcademicRecordRow | undefined {
@@ -46,10 +66,7 @@ function pickLatestAcademic(
 
 function studentMatchesSession(
   academic: AcademicRecordRow | undefined,
-  session: Pick<
-    AttendanceSession,
-    "department" | "course" | "year_level"
-  >
+  session: SessionScope
 ): boolean {
   if (!academic) return false;
   if (session.department && academic.department !== session.department) {
@@ -60,6 +77,89 @@ function studentMatchesSession(
     return false;
   }
   return true;
+}
+
+function chunkIds(ids: string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) {
+    chunks.push(ids.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function getCandidateStudentIds(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  session: SessionScope
+): Promise<string[] | null> {
+  if (!session.department && !session.course && !session.year_level) {
+    return null;
+  }
+
+  let query = supabase.from("student_academic_records").select("student_id");
+
+  if (session.department) {
+    query = query.eq("department", session.department);
+  }
+  if (session.course) {
+    query = query.eq("course", session.course);
+  }
+  if (session.year_level) {
+    query = query.eq("year_level", session.year_level);
+  }
+
+  const { data, error } = await query;
+  if (error || !data) return [];
+
+  return [...new Set(data.map((row) => row.student_id))];
+}
+
+async function fetchActiveStudentsByIds(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  studentIds: string[]
+): Promise<StudentRow[]> {
+  if (studentIds.length === 0) return [];
+
+  const students: StudentRow[] = [];
+
+  for (const ids of chunkIds(studentIds, STUDENT_ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from("students")
+      .select(STUDENT_ROSTER_SELECT)
+      .eq("student_status", "Active")
+      .in("id", ids)
+      .order("student_number", { ascending: true });
+
+    if (error || !data) continue;
+    students.push(...(data as StudentRow[]));
+  }
+
+  return students;
+}
+
+async function fetchAllActiveStudents(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<StudentRow[]> {
+  const students: StudentRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + STUDENT_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("students")
+      .select(STUDENT_ROSTER_SELECT)
+      .eq("student_status", "Active")
+      .order("student_number", { ascending: true })
+      .range(from, to);
+
+    if (error || !data?.length) break;
+
+    students.push(...(data as StudentRow[]));
+
+    if (data.length < STUDENT_PAGE_SIZE) break;
+    from += STUDENT_PAGE_SIZE;
+  }
+
+  return students;
 }
 
 export async function getSessionAttendanceRoster(
@@ -75,28 +175,16 @@ export async function getSessionAttendanceRoster(
 
   if (sessionError || !session) return [];
 
-  const [{ data: students }, { data: logs }] = await Promise.all([
-    supabase
-      .from("students")
-      .select(
-        `
-        id,
-        student_number,
-        full_name,
-        student_academic_records (
-          department,
-          course,
-          year_level,
-          created_at
-        )
-      `
-      )
-      .eq("student_status", "Active")
-      .order("student_number", { ascending: true }),
+  const candidateIds = await getCandidateStudentIds(supabase, session);
+
+  const [{ data: logs }, students] = await Promise.all([
     supabase
       .from("attendance_logs")
       .select("id, student_id, scanned_at, time_out_at, attendance_status")
       .eq("session_id", sessionId),
+    candidateIds === null
+      ? fetchAllActiveStudents(supabase)
+      : fetchActiveStudentsByIds(supabase, candidateIds),
   ]);
 
   const logByStudent = new Map<string, AttendanceLogRow>();
@@ -106,7 +194,7 @@ export async function getSessionAttendanceRoster(
 
   const roster: SessionAttendanceRow[] = [];
 
-  for (const student of (students ?? []) as StudentRow[]) {
+  for (const student of students) {
     const academic = pickLatestAcademic(student.student_academic_records);
     if (!studentMatchesSession(academic, session)) continue;
 
