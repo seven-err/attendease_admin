@@ -1,25 +1,53 @@
-import { getDashboardStats } from "@/lib/data/dashboard";
+import { getAdminOverviewStats } from "@/lib/admin/overview";
 import {
   Barcode,
+  Building2,
   DoorOpen,
   UserCheck,
   Users,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 
-const statCardConfig = [
-  { label: "Active Checkers", key: "activeCheckers" as const, icon: UserCheck },
-  { label: "Total Students", key: "totalStudents" as const, icon: Users },
-  { label: "Open Sessions Today", key: "openSessionsToday" as const, icon: DoorOpen },
-  { label: "Attendance Scans Today", key: "scansToday" as const, icon: Barcode },
-];
-
 export async function DashboardStatsCards() {
-  const stats = await getDashboardStats();
+  const stats = await getAdminOverviewStats();
+  const isScoped = Boolean(stats.scopedDepartment);
+
+  const cards = [
+    {
+      label: isScoped ? "Department Members" : "Active People",
+      value: stats.totalStudents,
+      icon: Users,
+      format: true,
+    },
+    {
+      label: "Active Checkers",
+      value: stats.activeCheckers,
+      icon: UserCheck,
+    },
+    {
+      label: "Open Sessions Today",
+      value: stats.openSessionsToday,
+      icon: DoorOpen,
+    },
+    {
+      label: "Attendance Today",
+      value: stats.scansToday,
+      icon: Barcode,
+    },
+    ...(!isScoped
+      ? [
+          {
+            label: "Active Departments",
+            value: stats.activeDepartments,
+            icon: Building2,
+          },
+        ]
+      : []),
+  ];
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {statCardConfig.map(({ label, key, icon: Icon }) => (
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+      {cards.map(({ label, value, icon: Icon, format }) => (
         <Card
           key={label}
           className="flex h-32 flex-col justify-between p-4 transition-shadow hover:shadow-md"
@@ -31,9 +59,7 @@ export async function DashboardStatsCards() {
             </div>
           </div>
           <p className="text-3xl font-bold tracking-tight text-foreground">
-            {key === "totalStudents"
-              ? stats[key].toLocaleString()
-              : stats[key]}
+            {format ? value.toLocaleString() : value}
           </p>
         </Card>
       ))}

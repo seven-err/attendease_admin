@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ADMIN_ROLE } from "@/lib/constants";
+import { PORTAL_ROLES } from "@/lib/constants";
+import { isPortalRole } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/client";
 import { ArrowRight, Eye, EyeOff, GraduationCap, Lock, Mail } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -41,8 +42,9 @@ export default function LoginPage() {
 
     const { data: profile, error: profileError } = await supabase
       .from("users")
-      .select("role, status")
+      .select("role, status, department")
       .eq("id", userId)
+      .in("role", [...PORTAL_ROLES])
       .maybeSingle();
 
     if (profileError || !profile) {
@@ -52,9 +54,21 @@ export default function LoginPage() {
       return;
     }
 
-    if (profile.role !== ADMIN_ROLE || profile.status !== "active") {
+    if (!isPortalRole(profile.role) || profile.status !== "active") {
       await supabase.auth.signOut();
       setError("Access denied. Admin credentials required.");
+      setLoading(false);
+      return;
+    }
+
+    if (
+      profile.role === "department_admin" &&
+      !profile.department?.trim()
+    ) {
+      await supabase.auth.signOut();
+      setError(
+        "Your department admin account is missing a department assignment."
+      );
       setLoading(false);
       return;
     }
@@ -82,7 +96,9 @@ export default function LoginPage() {
           <h1 className="text-3xl font-bold tracking-tight text-maroon-dark">
             AttendEase
           </h1>
-          <p className="mt-1.5 text-sm text-text-secondary">Admin Portal</p>
+          <p className="mt-1.5 text-sm text-text-secondary">
+            Campus &amp; Department Admin Portal
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -158,7 +174,7 @@ export default function LoginPage() {
         </form>
 
         <div className="mt-6 text-center">
-          <Link href="#" className="link-brand text-sm">
+          <Link href="/forgot-password" className="link-brand text-sm">
             Forgot password?
           </Link>
         </div>

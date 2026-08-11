@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath, revalidateTag } from "next/cache";
-import { getAdminProfile } from "@/lib/auth";
+import { getPortalProfile } from "@/lib/auth";
+import { can, scopedDepartment } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/server";
 import {
   currentAcademicYear,
@@ -14,10 +15,26 @@ import {
   type StudentImportResult,
 } from "@/lib/validations/student-import";
 
-async function requireAdmin(): Promise<StudentActionResult | null> {
-  const profile = await getAdminProfile();
-  if (!profile) {
-    return { success: false, error: "Unauthorized. Admin access required." };
+async function requirePeoplePermission(
+  permission: "people.create" | "people.edit" | "people.archive" | "people.delete" | "bulk_import.execute"
+): Promise<StudentActionResult | null> {
+  const profile = await getPortalProfile();
+  if (!profile || !can(profile, permission)) {
+    return {
+      success: false,
+      error: "You don't have permission to manage the roster.",
+    };
+  }
+  return null;
+}
+
+async function enforceDepartmentScope(
+  department: string
+): Promise<string | null> {
+  const profile = await getPortalProfile();
+  const scope = scopedDepartment(profile);
+  if (scope && department !== scope) {
+    return "You can only manage people in your assigned department.";
   }
   return null;
 }
@@ -88,12 +105,15 @@ async function insertStudentRecord(
 export async function createStudent(
   formData: FormData
 ): Promise<StudentActionResult> {
-  const authError = await requireAdmin();
+  const authError = await requirePeoplePermission("people.create");
   if (authError) return authError;
 
   const input = parseStudentForm(formData);
   const validationError = validateStudentForm(input);
   if (validationError) return validationError;
+
+  const scopeError = await enforceDepartmentScope(input.department);
+  if (scopeError) return { success: false, error: scopeError };
 
   if (await isStudentNumberTaken(input.student_number)) {
     return { success: false, error: "Student number already exists." };
@@ -114,7 +134,7 @@ export async function updateStudent(
   studentId: string,
   formData: FormData
 ): Promise<StudentActionResult> {
-  const authError = await requireAdmin();
+  const authError = await requirePeoplePermission("people.edit");
   if (authError) return authError;
 
   if (!studentId) {
@@ -124,6 +144,9 @@ export async function updateStudent(
   const input = parseStudentForm(formData);
   const validationError = validateStudentForm(input);
   if (validationError) return validationError;
+
+  const scopeError = await enforceDepartmentScope(input.department);
+  if (scopeError) return { success: false, error: scopeError };
 
   if (await isStudentNumberTaken(input.student_number, studentId)) {
     return { success: false, error: "Student number already exists." };
@@ -194,7 +217,7 @@ export async function updateStudent(
 export async function archiveStudent(
   studentId: string
 ): Promise<StudentActionResult> {
-  const authError = await requireAdmin();
+  const authError = await requirePeoplePermission("people.archive");
   if (authError) return authError;
 
   if (!studentId) {
@@ -229,11 +252,18 @@ export async function archiveStudent(
 export async function importStudentsFromCsv(
   csvText: string
 ): Promise<StudentImportResult> {
-  const authError = await requireAdmin();
-  if (authError && !authError.success) {
-    return { success: false, error: authError.error };
+  const profile = await getPortalProfile();
+  if (
+    !profile ||
+    (!can(profile, "bulk_import.execute") && !can(profile, "people.create"))
+  ) {
+    return {
+      success: false,
+      error: "You don't have permission to import people.",
+    };
   }
 
+  const scope = scopedDepartment(profile);
   const preview = parseStudentImportCsv(csvText);
   if (preview.rows.length === 0) {
     return {
@@ -248,6 +278,15 @@ export async function importStudentsFromCsv(
   const errors = [...preview.errors];
 
   for (const row of preview.rows) {
+    if (scope && row.department !== scope) {
+      skipped += 1;
+      errors.push({
+        row: row.rowNumber,
+        message: `Department ${row.department} is outside your scope (${scope}).`,
+      });
+      continue;
+    }
+
     if (await isStudentNumberTaken(row.student_number)) {
       skipped += 1;
       errors.push({

@@ -1,4 +1,7 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
+import { getPortalProfile } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import {
   buildReportsQueryParams,
   getReportsPageData,
@@ -27,6 +30,11 @@ function ReportsTableFallback() {
 }
 
 export default async function ReportsPage({ searchParams }: ReportsPageProps) {
+  const profile = await getPortalProfile();
+  if (!profile || !can(profile, "reports.view")) {
+    redirect("/dashboard");
+  }
+
   const params = await searchParams;
   const query = buildReportsQueryParams(params);
   const data = await getReportsPageData(query);

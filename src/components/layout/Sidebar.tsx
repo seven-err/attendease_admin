@@ -2,16 +2,53 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { GraduationCap, LogOut } from "lucide-react";
-import { footerNavItems, navItems } from "@/lib/navigation";
+import type { AdminShellProfile } from "@/components/layout/AdminShell";
+import {
+  filterNavItems,
+  footerNavItems,
+  navItems,
+} from "@/lib/navigation";
+import { can, isSuperAdmin } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { ADMIN_ROLE, DEPARTMENT_ADMIN_ROLE } from "@/lib/constants";
 
-export function Sidebar() {
+type SidebarProps = {
+  profile: AdminShellProfile;
+};
+
+function roleLabel(role: AdminShellProfile["role"], department: string | null) {
+  if (role === ADMIN_ROLE) return "Super Admin";
+  if (role === DEPARTMENT_ADMIN_ROLE) {
+    return department ? `${department} Admin` : "Department Admin";
+  }
+  return "Admin";
+}
+
+export function Sidebar({ profile }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
+
+  const mainNav = useMemo(
+    () =>
+      filterNavItems(navItems, {
+        isSuperAdmin: isSuperAdmin(profile),
+        can: (permission) => can(profile, permission),
+      }),
+    [profile]
+  );
+
+  const footerNav = useMemo(
+    () =>
+      filterNavItems(footerNavItems, {
+        isSuperAdmin: isSuperAdmin(profile),
+        can: (permission) => can(profile, permission),
+      }),
+    [profile]
+  );
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -32,14 +69,19 @@ export function Sidebar() {
             <p className="text-lg font-bold tracking-tight text-maroon">
               AttendEase
             </p>
-            <p className="text-xs font-medium text-text-muted">Admin Portal</p>
+            <p className="text-xs font-medium text-text-muted">
+              {roleLabel(profile.role, profile.department)}
+            </p>
           </div>
         </div>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-0.5 px-3 py-4" aria-label="Main">
-        {navItems.map(({ label, href, icon: Icon }) => {
-          const active = pathname === href;
+      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-4" aria-label="Main">
+        {mainNav.map(({ label, href, icon: Icon }) => {
+          const active = Boolean(
+            pathname &&
+              (pathname === href || pathname.startsWith(`${href}/`))
+          );
           return (
             <Link
               key={href}
@@ -55,7 +97,7 @@ export function Sidebar() {
             >
               {active && (
                 <span
-                  className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-maroon"
+                  className="absolute bottom-1.5 left-0 top-1.5 w-1 rounded-r-full bg-maroon"
                   aria-hidden
                 />
               )}
@@ -67,11 +109,20 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-border-subtle px-3 py-4">
-        {footerNavItems.map(({ label, href, icon: Icon }) => {
-          const active = pathname === href;
+        <div className="mb-3 px-3">
+          <p className="truncate text-sm font-medium text-foreground">
+            {profile.fullName}
+          </p>
+          <p className="truncate text-xs text-text-muted">{profile.email}</p>
+        </div>
+        {footerNav.map(({ label, href, icon: Icon }) => {
+          const active = Boolean(
+            pathname &&
+              (pathname === href || pathname.startsWith(`${href}/`))
+          );
           return (
             <Link
-              key={label}
+              key={href}
               href={href}
               aria-current={active ? "page" : undefined}
               className={cn(

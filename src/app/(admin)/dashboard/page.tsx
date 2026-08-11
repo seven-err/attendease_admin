@@ -8,14 +8,23 @@ import {
   CardSkeleton,
   PanelSkeleton,
 } from "@/components/ui/PageSkeletons";
+import { getPortalProfile } from "@/lib/auth";
+import { ADMIN_ROLE } from "@/lib/constants";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const profile = await getPortalProfile();
+  const greetingName = profile?.full_name?.split(" ")[0] ?? "Admin";
+  const scopeLabel =
+    profile?.role === ADMIN_ROLE
+      ? "Campus-wide attendance overview"
+      : `${profile?.department ?? "Department"} attendance overview`;
+
   return (
     <DashboardRealtime>
       <div className="mx-auto max-w-7xl space-y-6">
         <PageHeader
-          title="Dashboard"
-          description="Attendance overview for today"
+          title={`Good day, ${greetingName}`}
+          description={scopeLabel}
         />
 
         <Suspense

@@ -1,16 +1,11 @@
-import { Sidebar } from "@/components/layout/Sidebar";
+import { AdminShell, type AdminShellProfile } from "@/components/layout/AdminShell";
 
 type AdminLayoutProps = {
   children: React.ReactNode;
+  profile: AdminShellProfile;
 };
 
-export function AdminLayout({ children }: AdminLayoutProps) {
-  return (
-    <div className="flex min-h-screen bg-background">
-      <Sidebar />
-      <div className="ml-60 flex min-h-screen flex-1 flex-col">
-        <main className="flex-1 p-6 lg:p-8">{children}</main>
-      </div>
-    </div>
-  );
+/** @deprecated Prefer AdminShell via (admin)/layout. */
+export function AdminLayout({ children, profile }: AdminLayoutProps) {
+  return <AdminShell profile={profile}>{children}</AdminShell>;
 }

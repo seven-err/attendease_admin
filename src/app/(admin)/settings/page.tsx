@@ -1,9 +1,17 @@
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getSettingsPageData } from "./actions";
 import { SettingsForm } from "./SettingsForm";
+import { getPortalProfile } from "@/lib/auth";
+import { isSuperAdmin } from "@/lib/permissions";
 
 export default async function SettingsPage() {
-  const { profile, settings } = await getSettingsPageData();
+  const profile = await getPortalProfile();
+  if (!isSuperAdmin(profile)) {
+    redirect("/dashboard");
+  }
+
+  const { settings } = await getSettingsPageData();
 
   return (
     <div className="space-y-4">

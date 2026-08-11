@@ -15,6 +15,7 @@ import type { PageSize } from "@/lib/pagination";
 import { truncateToken } from "@/lib/format";
 import { archiveStudent, createStudent, updateStudent } from "./actions";
 import { ImportCsvModal } from "./ImportCsvModal";
+import { PeopleKindTabs } from "./PeopleKindTabs";
 import { StudentForm } from "./StudentForm";
 import { Archive, FileUp, Pencil, Plus, Search } from "lucide-react";
 
@@ -131,8 +132,8 @@ export function StudentsTable({
 
       <div className="mx-auto max-w-7xl space-y-4">
         <PageHeader
-          title="Students"
-          description="Manage student records and QR tokens"
+          title="People"
+          description="Students and CRMC staff roster"
           actions={
             <>
               <Button
@@ -149,6 +150,8 @@ export function StudentsTable({
             </>
           }
         />
+
+        <PeopleKindTabs active="students" />
 
         <div className="card flex flex-wrap items-center gap-3 p-4">
           <div className="relative min-w-[200px] flex-1">

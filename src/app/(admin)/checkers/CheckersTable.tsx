@@ -6,22 +6,26 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Pagination } from "@/components/ui/Pagination";
 import { CheckerRow } from "@/lib/attendeaseTypes";
-import { DEPARTMENTS, SSG_LABEL } from "@/lib/constants";
+import { DEPARTMENTS, EMPLOYEE_LABEL, SSG_LABEL } from "@/lib/constants";
 import { useListParams } from "@/lib/hooks/useListParams";
 import type { PageSize } from "@/lib/pagination";
 import { displayUserStatus } from "@/lib/format";
 import {
-  Archive,
   Ban,
   Check,
+  Hash,
+  KeyRound,
   Pencil,
   Plus,
   Search,
+  Trash2,
 } from "lucide-react";
 import { CheckerForm } from "./CheckerForm";
 import {
-  archiveChecker,
   createChecker,
+  deleteChecker,
+  resetCheckerPassword,
+  resetCheckerPins,
   toggleCheckerActive,
   updateChecker,
 } from "./actions";
@@ -34,6 +38,7 @@ type CheckersTableProps = {
   totalPages: number;
   search: string;
   department: string;
+  isSuperAdmin: boolean;
 };
 
 export function CheckersTable({
@@ -44,6 +49,7 @@ export function CheckersTable({
   totalPages,
   search,
   department,
+  isSuperAdmin,
 }: CheckersTableProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -96,17 +102,55 @@ export function CheckersTable({
     });
   }
 
-  function handleArchive(checkerId: string) {
+  function handleDelete(checker: CheckerRow) {
+    const confirmed = window.confirm(
+      `Permanently delete ${checker.full_name} (${checker.email})?\n\nThis removes their login and checker profiles. Attendance history is kept.`
+    );
+    if (!confirmed) return;
+
     setError(null);
     startTransition(async () => {
-      const result = await archiveChecker(checkerId);
+      const result = await deleteChecker(checker.id);
       if (!result.success) {
         setError(result.error);
         return;
       }
-      setSuccess("Checker archived successfully.");
+      setSuccess("Checker deleted permanently.");
       router.refresh();
       closeModal();
+    });
+  }
+
+  function handleResetPassword(checkerId: string) {
+    setError(null);
+    startTransition(async () => {
+      const result = await resetCheckerPassword(checkerId);
+      if (!result.success) {
+        setError(result.error);
+        return;
+      }
+      setSuccess(
+        result.tempPassword
+          ? `Password reset. Temporary password: ${result.tempPassword}`
+          : "Password reset."
+      );
+    });
+  }
+
+  function handleResetPins(checkerId: string) {
+    setError(null);
+    startTransition(async () => {
+      const result = await resetCheckerPins(checkerId);
+      if (!result.success) {
+        setError(result.error);
+        return;
+      }
+      const count = result.profilesReset ?? 0;
+      setSuccess(
+        result.tempPin
+          ? `PIN reset for ${count} profile${count === 1 ? "" : "s"}. Temporary PIN: ${result.tempPin}`
+          : "PIN reset."
+      );
     });
   }
 
@@ -144,11 +188,11 @@ export function CheckersTable({
     <>
       {success && (
         <div className="mx-auto mb-4 flex max-w-7xl items-center justify-between rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-          <span>{success}</span>
+          <span className="break-all">{success}</span>
           <button
             type="button"
             onClick={() => setSuccess(null)}
-            className="font-bold"
+            className="shrink-0 font-bold"
           >
             Dismiss
           </button>
@@ -209,6 +253,7 @@ export function CheckersTable({
               </option>
             ))}
             <option value="ssg">{SSG_LABEL}</option>
+            <option value="employee">{EMPLOYEE_LABEL}</option>
           </select>
         </div>
 
@@ -246,6 +291,8 @@ export function CheckersTable({
                     <td className="px-4 py-4">
                       {checker.checker_scope === "ssg" ? (
                         <Badge>{SSG_LABEL}</Badge>
+                      ) : checker.checker_scope === "employee" ? (
+                        <Badge>{EMPLOYEE_LABEL}</Badge>
                       ) : checker.department ? (
                         <Badge dept={checker.department}>
                           {checker.department}
@@ -274,6 +321,41 @@ export function CheckersTable({
                           <Pencil className="size-4" />
                         </button>
 
+                        {isSuperAdmin && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleResetPassword(checker.id)}
+                              disabled={isPending}
+                              className="rounded p-1 hover:bg-gray-100 disabled:opacity-60"
+                              aria-label={`Reset password for ${checker.full_name}`}
+                              title="Reset password"
+                            >
+                              <KeyRound className="size-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleResetPins(checker.id)}
+                              disabled={isPending}
+                              className="rounded p-1 hover:bg-gray-100 disabled:opacity-60"
+                              aria-label={`Reset PINs for ${checker.full_name}`}
+                              title="Reset PINs"
+                            >
+                              <Hash className="size-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(checker)}
+                              disabled={isPending}
+                              className="rounded p-1 text-maroon hover:bg-gray-100 disabled:opacity-60"
+                              aria-label={`Delete ${checker.full_name}`}
+                              title="Delete checker"
+                            >
+                              <Trash2 className="size-4" />
+                            </button>
+                          </>
+                        )}
+
                         <button
                           type="button"
                           onClick={() => handleToggleStatus(checker.id)}
@@ -285,15 +367,6 @@ export function CheckersTable({
                           ) : (
                             <Check className="size-4" />
                           )}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleArchive(checker.id)}
-                          className="rounded p-1 hover:bg-gray-100"
-                          aria-label="Archive checker"
-                        >
-                          <Archive className="size-4" />
                         </button>
                       </div>
                     </td>
@@ -330,14 +403,14 @@ export function CheckersTable({
             >
               Cancel
             </button>
-            {isEdit && (
+            {isEdit && isSuperAdmin && (
               <button
                 type="button"
-                onClick={() => handleArchive(selectedChecker!.id)}
+                onClick={() => handleDelete(selectedChecker!)}
                 disabled={isPending}
-                className="px-4 py-2 text-sm font-bold text-maroon disabled:opacity-60"
+                className="px-4 py-2 text-sm font-bold text-red-700 disabled:opacity-60"
               >
-                Archive
+                Delete
               </button>
             )}
             <button
@@ -361,8 +434,32 @@ export function CheckersTable({
           key={selectedChecker?.id ?? "new"}
           formId={formId}
           checker={selectedChecker}
+          canEditEmail={isSuperAdmin}
           onSubmit={handleSave}
         />
+
+        {isEdit && isSuperAdmin && (
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
+            <button
+              type="button"
+              onClick={() => handleResetPassword(selectedChecker!.id)}
+              disabled={isPending}
+              className="flex items-center gap-2 rounded border border-border px-3 py-2 text-sm font-bold disabled:opacity-60"
+            >
+              <KeyRound className="size-4" />
+              Reset password
+            </button>
+            <button
+              type="button"
+              onClick={() => handleResetPins(selectedChecker!.id)}
+              disabled={isPending}
+              className="flex items-center gap-2 rounded border border-border px-3 py-2 text-sm font-bold disabled:opacity-60"
+            >
+              <Hash className="size-4" />
+              Reset PINs
+            </button>
+          </div>
+        )}
       </Modal>
     </>
   );

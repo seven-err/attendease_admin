@@ -1,4 +1,7 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
+import { getPortalProfile } from "@/lib/auth";
+import { can, isSuperAdmin } from "@/lib/permissions";
 import {
   getCheckersPaginated,
   type CheckersQueryParams,
@@ -27,6 +30,11 @@ function CheckersTableFallback() {
 }
 
 export default async function CheckersPage({ searchParams }: CheckersPageProps) {
+  const profile = await getPortalProfile();
+  if (!profile || !can(profile, "checkers.view")) {
+    redirect("/dashboard");
+  }
+
   const params = await searchParams;
   const department =
     typeof params.dept === "string"
@@ -54,6 +62,7 @@ export default async function CheckersPage({ searchParams }: CheckersPageProps) 
         totalPages={result.totalPages}
         search={query.search ?? ""}
         department={query.department ?? "all"}
+        isSuperAdmin={isSuperAdmin(profile)}
       />
     </Suspense>
   );

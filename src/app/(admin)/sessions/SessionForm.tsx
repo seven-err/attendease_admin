@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import {
+  MainSession,
   SESSION_STATUSES,
   SessionWithStats,
 } from "@/lib/attendeaseTypes";
@@ -21,6 +23,10 @@ type SessionFormProps = {
   formId: string;
   session?: SessionWithStats | null;
   checkers: SessionCheckerOption[];
+  mainSessions: MainSession[];
+  /** Prefill when adding a sub-session from a main card. */
+  defaultMainSessionId?: string | null;
+  lockOrganization?: boolean;
   onSubmit: (formData: FormData) => void;
 };
 
@@ -28,12 +34,28 @@ export function SessionForm({
   formId,
   session,
   checkers,
+  mainSessions,
+  defaultMainSessionId = null,
+  lockOrganization = false,
   onSubmit,
 }: SessionFormProps) {
   const isEdit = Boolean(session);
   const phaseTimes = session
     ? resolvePhaseTimes(session)
     : DEFAULT_PHASE_TIMES;
+
+  const initialMainId =
+    session?.main_session_id ?? defaultMainSessionId ?? "";
+  const [organization, setOrganization] = useState<"standalone" | "sub">(
+    initialMainId ? "sub" : "standalone"
+  );
+  const [mainSessionId, setMainSessionId] = useState(initialMainId);
+
+  const activeMains = mainSessions.filter(
+    (main) =>
+      main.status === "Active" ||
+      (isEdit && main.id === session?.main_session_id)
+  );
 
   return (
     <form
@@ -44,6 +66,66 @@ export function SessionForm({
       }}
       className="space-y-4"
     >
+      <div className="space-y-3 rounded border border-border p-4">
+        <p className="text-sm font-bold">Organization</p>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="organization_kind"
+              value="standalone"
+              checked={organization === "standalone"}
+              disabled={lockOrganization}
+              onChange={() => {
+                setOrganization("standalone");
+                setMainSessionId("");
+              }}
+            />
+            Standalone session
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="organization_kind"
+              value="sub"
+              checked={organization === "sub"}
+              disabled={lockOrganization && Boolean(defaultMainSessionId)}
+              onChange={() => setOrganization("sub")}
+            />
+            Sub-session under a main
+          </label>
+        </div>
+
+        {organization === "sub" ? (
+          <div>
+            <label className="mb-1 block text-sm font-bold">Main session</label>
+            <select
+              name="main_session_id"
+              value={mainSessionId}
+              required
+              disabled={lockOrganization && Boolean(defaultMainSessionId)}
+              onChange={(e) => setMainSessionId(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Select main session</option>
+              {activeMains.map((main) => (
+                <option key={main.id} value={main.id}>
+                  {main.name}
+                  {main.department ? ` (${main.department})` : ""}
+                </option>
+              ))}
+            </select>
+            {activeMains.length === 0 && (
+              <p className="mt-1 text-xs text-text-muted">
+                Create a main session first, then add sub-sessions under it.
+              </p>
+            )}
+          </div>
+        ) : (
+          <input type="hidden" name="main_session_id" value="" />
+        )}
+      </div>
+
       <div>
         <label className="mb-1 block text-sm font-bold">Title</label>
         <input
@@ -136,7 +218,12 @@ export function SessionForm({
           <label className="mb-1 block text-sm font-bold">Department</label>
           <select
             name="department"
-            defaultValue={session?.department ?? ""}
+            defaultValue={
+              session?.department ??
+              activeMains.find((main) => main.id === mainSessionId)
+                ?.department ??
+              ""
+            }
             required
             className={inputClass}
           >

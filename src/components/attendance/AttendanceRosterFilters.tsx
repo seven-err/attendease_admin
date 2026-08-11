@@ -59,6 +59,7 @@ export function AttendanceRosterFilters({
           <option value="On Time">On Time</option>
           <option value="Late">Late</option>
           <option value="Absent">Absent</option>
+          <option value="Voided">Voided</option>
         </select>
       )}
     </div>

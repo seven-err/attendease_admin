@@ -1,5 +1,5 @@
 import { CheckerRow } from "@/lib/attendeaseTypes";
-import { CHECKER_ROLE, DEPARTMENTS } from "@/lib/constants";
+import { CHECKER_ROLE, DEPARTMENTS, EMPLOYEE_LABEL } from "@/lib/constants";
 import {
   buildPaginatedResult,
   getRange,
@@ -17,14 +17,21 @@ type CheckerDbRow = {
   checker_scope?: string | null;
 };
 
+function mapCheckerScope(
+  scope: string | null | undefined
+): CheckerRow["checker_scope"] {
+  if (scope === "ssg") return "ssg";
+  if (scope === "employee") return "employee";
+  return "department";
+}
+
 function mapCheckerRow(row: CheckerDbRow): CheckerRow {
   return {
     id: row.id,
     full_name: row.full_name,
     email: row.email,
     department: row.department ?? null,
-    checker_scope:
-      row.checker_scope === "ssg" ? "ssg" : "department",
+    checker_scope: mapCheckerScope(row.checker_scope),
     status: row.status,
   };
 }
@@ -55,8 +62,12 @@ export async function getCheckersPaginated(
 
   if (department === "ssg") {
     query = query.eq("checker_scope", "ssg");
+  } else if (department === "employee" || department === EMPLOYEE_LABEL) {
+    query = query.eq("checker_scope", "employee");
   } else if (department !== "all") {
-    query = query.or(`department.eq.${department},checker_scope.eq.ssg`);
+    query = query.or(
+      `department.eq.${department},checker_scope.eq.ssg,checker_scope.eq.employee`
+    );
   }
 
   if (search) {
@@ -67,7 +78,10 @@ export async function getCheckersPaginated(
   const { from, to } = getRange(page, pageSize);
   let { data, error, count } = await query.range(from, to);
 
-  if (error?.message?.includes("department") || error?.message?.includes("checker_scope")) {
+  if (
+    error?.message?.includes("department") ||
+    error?.message?.includes("checker_scope")
+  ) {
     let fallback = supabase
       .from("users")
       .select("id, full_name, email, role, status", { count: "exact" })
@@ -118,7 +132,10 @@ export async function getCheckers(): Promise<CheckerRow[]> {
     .eq("role", CHECKER_ROLE)
     .order("full_name", { ascending: true });
 
-  if (error?.message?.includes("department") || error?.message?.includes("checker_scope")) {
+  if (
+    error?.message?.includes("department") ||
+    error?.message?.includes("checker_scope")
+  ) {
     const fallback = await supabase
       .from("users")
       .select("id, full_name, email, role, status")

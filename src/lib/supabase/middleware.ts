@@ -31,18 +31,35 @@ export async function updateSession(request: NextRequest) {
 
   const user = session?.user;
 
-  const isAuthPage = request.nextUrl.pathname === "/login";
-  const isProtected =
-    request.nextUrl.pathname.startsWith("/dashboard") ||
-    request.nextUrl.pathname.startsWith("/students") ||
-    request.nextUrl.pathname.startsWith("/sessions") ||
-    request.nextUrl.pathname.startsWith("/checkers") ||
-    request.nextUrl.pathname.startsWith("/reports") ||
-    request.nextUrl.pathname.startsWith("/settings");
+  const isAuthPage =
+    request.nextUrl.pathname === "/login" ||
+    request.nextUrl.pathname.startsWith("/forgot-password") ||
+    request.nextUrl.pathname.startsWith("/reset-password");
+
+  const protectedPrefixes = [
+    "/dashboard",
+    "/students",
+    "/sessions",
+    "/checkers",
+    "/reports",
+    "/settings",
+    "/departments",
+    "/users",
+    "/attendance",
+    "/qr",
+    "/import",
+    "/audit",
+    "/profile",
+  ];
+
+  const isProtected = protectedPrefixes.some((prefix) =>
+    request.nextUrl.pathname.startsWith(prefix)
+  );
 
   if (!user && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    url.searchParams.set("next", request.nextUrl.pathname);
     return NextResponse.redirect(url);
   }
 

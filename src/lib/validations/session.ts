@@ -23,6 +23,8 @@ export type SessionFormInput = {
   academic_year: string;
   assigned_checker_id: string;
   status: AttendanceSessionStatus;
+  /** Empty string = standalone. UUID = sub-session under that main. */
+  main_session_id: string;
 };
 
 function isSessionStatus(value: string): value is AttendanceSessionStatus {
@@ -69,6 +71,7 @@ export function parseSessionForm(formData: FormData): SessionFormInput {
     academic_year: String(formData.get("academic_year") ?? "").trim(),
     assigned_checker_id: String(formData.get("assigned_checker_id") ?? "").trim(),
     status: isSessionStatus(status) ? status : "Draft",
+    main_session_id: String(formData.get("main_session_id") ?? "").trim(),
   };
 }
 
@@ -128,6 +131,14 @@ export function validateSessionForm(
       error: "Assign a checker before opening the session.",
     };
   }
+  if (
+    input.main_session_id &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      input.main_session_id
+    )
+  ) {
+    return { success: false, error: "Invalid main session selection." };
+  }
   return null;
 }
 
@@ -151,6 +162,7 @@ export function sessionPayloadFromInput(
     academic_year: input.academic_year || currentAcademicYear(),
     assigned_checker_id: input.assigned_checker_id || null,
     status: input.status,
+    main_session_id: input.main_session_id || null,
     ...(createdBy ? { created_by: createdBy } : {}),
   };
 }

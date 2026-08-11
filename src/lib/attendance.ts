@@ -1,13 +1,14 @@
 import { AttendanceStatus } from "@/lib/attendeaseTypes";
 
 /** Present only when both time-in and time-out are recorded. */
-export type ResolvedAttendanceStatus = AttendanceStatus | "On Time";
+export type ResolvedAttendanceStatus = AttendanceStatus | "On Time" | "Voided";
 
 export function resolveAttendanceStatus(
   scannedAt: string | null | undefined,
   timeOutAt: string | null | undefined,
   storedStatus?: string | null
 ): ResolvedAttendanceStatus {
+  if (storedStatus === "Voided") return "Voided";
   if (!scannedAt) return "Absent";
   if (storedStatus === "Late") return "Late";
   if (timeOutAt) return "Present";
@@ -42,6 +43,7 @@ export function summarizeAttendanceStatuses(
     if (status === "Present") summary.present++;
     else if (status === "Late") summary.late++;
     else if (status === "On Time") summary.onTime++;
+    else if (status === "Voided") summary.absent++;
     else summary.absent++;
   }
 

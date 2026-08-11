@@ -25,7 +25,7 @@ export type AppUserProfile = {
   role: AppRole;
   status: "active" | "inactive" | "archived";
   department?: string | null;
-  checker_scope?: "department" | "ssg" | null;
+  checker_scope?: "department" | "ssg" | "employee" | null;
 };
 
 export type StudentRecord = {
@@ -50,6 +50,9 @@ export type StudentAcademicRecord = {
   updated_at: string;
 };
 
+export const MAIN_SESSION_STATUSES = ["Active", "Archived", "Trashed"] as const;
+export type MainSessionStatus = (typeof MAIN_SESSION_STATUSES)[number];
+
 export type AttendanceSession = {
   id: string;
   title: string;
@@ -65,11 +68,28 @@ export type AttendanceSession = {
   course: string | null;
   year_level: string | null;
   academic_year: string | null;
+  /** Null = standalone session. Set = sub-session under a main session. */
+  main_session_id: string | null;
+  /** Parent main-session name when joined for display. */
+  main_session_name?: string | null;
   assigned_checker_id: string | null;
   created_by: string | null;
   status: AttendanceSessionStatus;
   created_at: string;
   updated_at: string;
+};
+
+export type MainSession = {
+  id: string;
+  name: string;
+  description: string | null;
+  academic_year: string | null;
+  department: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  status: MainSessionStatus;
+  sub_session_count: number;
 };
 
 export type StudentWithAcademic = StudentRecord & {
@@ -95,8 +115,21 @@ export type CheckerRow = {
   full_name: string;
   email: string;
   department: string | null;
-  checker_scope: "department" | "ssg";
+  checker_scope: "department" | "ssg" | "employee";
   status: "active" | "inactive" | "archived";
+};
+
+export type StaffWithAssignment = {
+  id: string;
+  person_number: string;
+  full_name: string;
+  person_status: string;
+  qr_token: string | null;
+  department: string | null;
+  job_title: string | null;
+  assignment_status: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type SessionWithStats = AttendanceSession & {
@@ -105,6 +138,16 @@ export type SessionWithStats = AttendanceSession & {
   late_count: number;
   absent_count: number;
   on_time_count: number;
+};
+
+export type MainSessionGroup = {
+  main: MainSession;
+  subs: SessionWithStats[];
+};
+
+export type OrganizedSessions = {
+  mainGroups: MainSessionGroup[];
+  standalones: SessionWithStats[];
 };
 
 export type SessionAttendanceRow = {

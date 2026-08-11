@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getAdminProfile } from "@/lib/auth";
+import { getPortalProfile, requireSuperAdmin } from "@/lib/auth";
+import { writeAuditLog } from "@/lib/admin/audit";
 import { getAppSettings, saveAppSettings } from "@/lib/data/settings";
 import {
   parseSettingsForm,
@@ -13,7 +14,7 @@ export type SettingsActionResult =
   | { success: false; error: string };
 
 export async function getSettingsPageData() {
-  const profile = await getAdminProfile();
+  const profile = await getPortalProfile();
   const settings = await getAppSettings();
 
   return {
@@ -25,9 +26,14 @@ export async function getSettingsPageData() {
 export async function updateAppSettings(
   formData: FormData
 ): Promise<SettingsActionResult> {
-  const profile = await getAdminProfile();
-  if (!profile) {
-    return { success: false, error: "Unauthorized. Admin access required." };
+  let profile;
+  try {
+    profile = await requireSuperAdmin();
+  } catch {
+    return {
+      success: false,
+      error: "You don't have permission to manage system settings.",
+    };
   }
 
   const input = parseSettingsForm(formData);
@@ -40,6 +46,12 @@ export async function updateAppSettings(
   if (!result.success) {
     return result;
   }
+
+  await writeAuditLog(profile, {
+    action: "system_settings_updated",
+    targetType: "app_settings",
+    metadata: { keys: Object.keys(input) },
+  });
 
   revalidatePath("/settings");
   revalidatePath("/dashboard");

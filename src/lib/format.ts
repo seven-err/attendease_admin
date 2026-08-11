@@ -98,6 +98,7 @@ export function resolvedAttendanceStatusVariant(
     case "On Time":
       return "status-present";
     case "Absent":
+    case "Voided":
       return "status-absent";
     default:
       return "status-absent";

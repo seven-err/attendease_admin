@@ -1,8 +1,16 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
+import { getPortalProfile } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import {
   getStudentsPaginated,
   type StudentsQueryParams,
 } from "@/lib/data/students";
+import {
+  getStaffDepartments,
+  getStaffPaginated,
+  type StaffQueryParams,
+} from "@/lib/data/staff";
 import type { PageSize } from "@/lib/pagination";
 import {
   parsePageParam,
@@ -10,6 +18,7 @@ import {
   parseSearchParam,
 } from "@/lib/pagination";
 import { PanelSkeleton, PageHeaderSkeleton } from "@/components/ui/PageSkeletons";
+import { StaffTable } from "./StaffTable";
 import { StudentsTable } from "./StudentsTable";
 
 type StudentsPageProps = {
@@ -26,27 +35,63 @@ function StudentsTableFallback() {
   );
 }
 
+function firstParam(
+  value: string | string[] | undefined,
+  fallback: string
+): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0] ?? fallback;
+  return fallback;
+}
+
 export default async function StudentsPage({ searchParams }: StudentsPageProps) {
+  const profile = await getPortalProfile();
+  if (!profile || !can(profile, "people.view")) {
+    redirect("/dashboard");
+  }
+
   const params = await searchParams;
-  const department =
-    typeof params.dept === "string"
-      ? params.dept
-      : Array.isArray(params.dept)
-        ? params.dept[0]
-        : "all";
-  const yearLevel =
-    typeof params.year === "string"
-      ? params.year
-      : Array.isArray(params.year)
-        ? params.year[0]
-        : "all";
+  const kind = firstParam(params.kind, "students") === "staff" ? "staff" : "students";
+  const department = firstParam(params.dept, "all") || "all";
+  const yearLevel = firstParam(params.year, "all") || "all";
+  const page = parsePageParam(params.page);
+  const pageSize = parsePageSizeParam(params.pageSize);
+  const search = parseSearchParam(params.q);
+
+  if (kind === "staff") {
+    const query: StaffQueryParams = {
+      page,
+      pageSize,
+      search,
+      department,
+    };
+    const [result, departments] = await Promise.all([
+      getStaffPaginated(query),
+      getStaffDepartments(),
+    ]);
+
+    return (
+      <Suspense fallback={<StudentsTableFallback />}>
+        <StaffTable
+          staff={result.items}
+          departments={departments}
+          page={result.page}
+          pageSize={result.pageSize as PageSize}
+          total={result.total}
+          totalPages={result.totalPages}
+          search={query.search ?? ""}
+          department={query.department ?? "all"}
+        />
+      </Suspense>
+    );
+  }
 
   const query: StudentsQueryParams = {
-    page: parsePageParam(params.page),
-    pageSize: parsePageSizeParam(params.pageSize),
-    search: parseSearchParam(params.q),
-    department: department || "all",
-    yearLevel: yearLevel || "all",
+    page,
+    pageSize,
+    search,
+    department,
+    yearLevel,
   };
 
   const result = await getStudentsPaginated(query);

@@ -27,6 +27,7 @@ type AttendanceLogRow = {
   scanned_at: string;
   time_out_at: string | null;
   attendance_status: string;
+  device_id: string | null;
 };
 
 type SessionScope = Pick<
@@ -180,7 +181,7 @@ export async function getSessionAttendanceRoster(
   const [{ data: logs }, students] = await Promise.all([
     supabase
       .from("attendance_logs")
-      .select("id, student_id, scanned_at, time_out_at, attendance_status")
+      .select("id, student_id, scanned_at, time_out_at, attendance_status, device_id")
       .eq("session_id", sessionId),
     candidateIds === null
       ? fetchAllActiveStudents(supabase)
@@ -199,11 +200,14 @@ export async function getSessionAttendanceRoster(
     if (!studentMatchesSession(academic, session)) continue;
 
     const log = logByStudent.get(student.id);
-    const status = resolveAttendanceStatus(
-      log?.scanned_at,
-      log?.time_out_at,
-      log?.attendance_status
-    );
+    const status =
+      log?.device_id === "__voided__"
+        ? "Voided"
+        : resolveAttendanceStatus(
+            log?.scanned_at,
+            log?.time_out_at,
+            log?.attendance_status
+          );
 
     roster.push({
       id: log?.id ?? `absent-${student.id}`,
