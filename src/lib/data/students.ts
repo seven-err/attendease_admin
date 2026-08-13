@@ -139,7 +139,7 @@ export async function getStudentsPaginated(
 
   const total = count ?? 0;
   const safeResult = buildPaginatedResult(
-    mapStudentRows(data as StudentWithAcademicRows[]),
+    mapStudentRows(data as unknown as StudentWithAcademicRows[]),
     total,
     page,
     pageSize
@@ -165,7 +165,7 @@ export async function getStudents(): Promise<StudentWithAcademic[]> {
 
   if (error || !students?.length) return [];
 
-  return mapStudentRows(students as StudentWithAcademicRows[]);
+  return mapStudentRows(students as unknown as StudentWithAcademicRows[]);
 }
 
 export async function getStudentCount(): Promise<number> {
