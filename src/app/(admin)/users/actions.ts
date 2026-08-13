@@ -225,12 +225,13 @@ export async function updatePortalUser(
 
   const userId = String(formData.get("user_id") ?? "").trim();
   const fullName = String(formData.get("full_name") ?? "").trim();
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const role = String(formData.get("role") ?? "").trim() as PortalRole;
   const department = String(formData.get("department") ?? "").trim() || null;
   const permissions = parsePermissions(formData.get("permissions"));
 
-  if (!userId || !fullName) {
-    return { success: false, error: "Missing required fields." };
+  if (!userId || !fullName || !email) {
+    return { success: false, error: "Name and email are required." };
   }
   if (role !== ADMIN_ROLE && role !== DEPARTMENT_ADMIN_ROLE) {
     return { success: false, error: "Invalid role." };
@@ -251,23 +252,73 @@ export async function updatePortalUser(
   const supabase = await createClient();
   const { data: existing } = await supabase
     .from("users")
-    .select("id, role, department")
+    .select("id, email, role, department")
     .eq("id", userId)
+    .in("role", [ADMIN_ROLE, DEPARTMENT_ADMIN_ROLE])
     .maybeSingle();
 
   if (!existing) return { success: false, error: "User not found." };
 
-  const { error } = await supabase
-    .from("users")
-    .update({
-      full_name: fullName,
-      role,
-      department: role === DEPARTMENT_ADMIN_ROLE ? department : null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", userId);
+  const previousEmail = (existing.email ?? "").trim().toLowerCase();
+  const emailChanged = email !== previousEmail;
 
-  if (error) return { success: false, error: error.message };
+  if (emailChanged) {
+    let admin;
+    try {
+      admin = createAdminClient();
+    } catch {
+      return {
+        success: false,
+        error:
+          "Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to your environment variables.",
+      };
+    }
+
+    const { error: authError } = await admin.auth.admin.updateUserById(
+      userId,
+      {
+        email,
+        email_confirm: true,
+      }
+    );
+    if (authError) {
+      return {
+        success: false,
+        error: authError.message ?? "Failed to update auth email.",
+      };
+    }
+
+    const { error: emailError } = await admin
+      .from("users")
+      .update({
+        full_name: fullName,
+        email,
+        role,
+        department: role === DEPARTMENT_ADMIN_ROLE ? department : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", userId)
+      .in("role", [ADMIN_ROLE, DEPARTMENT_ADMIN_ROLE]);
+
+    if (emailError) {
+      return {
+        success: false,
+        error: emailError.message ?? "Failed to update profile email.",
+      };
+    }
+  } else {
+    const { error } = await supabase
+      .from("users")
+      .update({
+        full_name: fullName,
+        role,
+        department: role === DEPARTMENT_ADMIN_ROLE ? department : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", userId);
+
+    if (error) return { success: false, error: error.message };
+  }
 
   if (role === DEPARTMENT_ADMIN_ROLE) {
     const permError = await savePermissions(userId, permissions, profile);
@@ -288,11 +339,15 @@ export async function updatePortalUser(
       role,
       previousRole: existing.role,
       previousDepartment: existing.department,
+      ...(emailChanged
+        ? { emailChanged: true, previousEmail, email }
+        : {}),
     },
   });
 
   revalidatePath("/users");
   revalidatePath("/departments");
+  if (userId === profile.id) revalidatePath("/profile");
   return { success: true, userId };
 }
 

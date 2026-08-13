@@ -31,6 +31,7 @@ type UsersManagerProps = {
   users: PortalUserRow[];
   schools: SchoolRow[];
   departments: DepartmentRow[];
+  currentUserId: string;
 };
 
 type WizardStep =
@@ -43,6 +44,7 @@ export function UsersManager({
   users,
   schools,
   departments,
+  currentUserId,
 }: UsersManagerProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -115,7 +117,7 @@ export function UsersManager({
   function nextStep() {
     setError(null);
     if (step === "details") {
-      if (!fullName.trim() || (mode === "create" && !email.trim())) {
+      if (!fullName.trim() || !email.trim()) {
         setError("Name and email are required.");
         return;
       }
@@ -229,6 +231,7 @@ export function UsersManager({
     departments.find((d) => d.code === department)?.name ??
     department ??
     "—";
+  const editingSelf = mode === "edit" && selected?.id === currentUserId;
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -416,6 +419,12 @@ export function UsersManager({
 
         {step === "details" && (
           <div className="space-y-3">
+            {editingSelf && (
+              <p className="rounded-lg border border-border bg-surface-raised px-3 py-2 text-sm text-text-secondary">
+                You are editing your own super admin account. Email can be
+                changed here; role cannot be demoted.
+              </p>
+            )}
             <label className="block text-sm">
               <span className="mb-1 block font-medium">Full name</span>
               <input
@@ -424,22 +433,21 @@ export function UsersManager({
                 onChange={(e) => setFullName(e.target.value)}
               />
             </label>
-            {mode === "create" && (
-              <label className="block text-sm">
-                <span className="mb-1 block font-medium">Email</span>
-                <input
-                  className="input"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </label>
-            )}
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium">Email</span>
+              <input
+                className="input"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
             <label className="block text-sm">
               <span className="mb-1 block font-medium">Role</span>
               <select
                 className="input"
                 value={role}
+                disabled={editingSelf}
                 onChange={(e) => setRole(e.target.value as PortalRole)}
               >
                 <option value={DEPARTMENT_ADMIN_ROLE}>Department Admin</option>
@@ -507,11 +515,9 @@ export function UsersManager({
             <p>
               <span className="font-semibold">Name:</span> {fullName}
             </p>
-            {mode === "create" && (
-              <p>
-                <span className="font-semibold">Email:</span> {email}
-              </p>
-            )}
+            <p>
+              <span className="font-semibold">Email:</span> {email}
+            </p>
             <p>
               <span className="font-semibold">Role:</span>{" "}
               {role === ADMIN_ROLE ? "Super Admin" : "Department Admin"}

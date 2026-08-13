@@ -25,6 +25,7 @@ export default async function UsersPage() {
       users={users}
       schools={schools}
       departments={departments}
+      currentUserId={profile.id}
     />
   );
 }
