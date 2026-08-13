@@ -10,7 +10,7 @@ import { UsersManager } from "./UsersManager";
 
 export default async function UsersPage() {
   const profile = await getPortalProfile();
-  if (!isSuperAdmin(profile)) {
+  if (!profile || !isSuperAdmin(profile)) {
     redirect("/dashboard");
   }
 
