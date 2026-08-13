@@ -148,7 +148,7 @@ export async function getStaffPaginated(
   }
 
   const total = count ?? 0;
-  const items = mapStaffRows(data as StaffDbRow[]);
+  const items = mapStaffRows(data as unknown as StaffDbRow[]);
   const safeResult = buildPaginatedResult(items, total, page, pageSize);
 
   if (safeResult.page !== page && total > 0) {
