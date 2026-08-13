@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getPortalProfile } from "@/lib/auth";
-import { can } from "@/lib/permissions";
+import { can, scopedDepartment } from "@/lib/permissions";
 import {
   getStudentsPaginated,
   type StudentsQueryParams,
@@ -52,7 +52,9 @@ export default async function StudentsPage({ searchParams }: StudentsPageProps) 
 
   const params = await searchParams;
   const kind = firstParam(params.kind, "students") === "staff" ? "staff" : "students";
-  const department = firstParam(params.dept, "all") || "all";
+  const scope = scopedDepartment(profile);
+  const requestedDept = firstParam(params.dept, "all") || "all";
+  const department = scope ?? requestedDept;
   const yearLevel = firstParam(params.year, "all") || "all";
   const page = parsePageParam(params.page);
   const pageSize = parsePageSizeParam(params.pageSize);
@@ -74,13 +76,14 @@ export default async function StudentsPage({ searchParams }: StudentsPageProps) 
       <Suspense fallback={<StudentsTableFallback />}>
         <StaffTable
           staff={result.items}
-          departments={departments}
+          departments={scope ? [scope] : departments}
           page={result.page}
           pageSize={result.pageSize as PageSize}
           total={result.total}
           totalPages={result.totalPages}
           search={query.search ?? ""}
           department={query.department ?? "all"}
+          scopedDepartment={scope}
         />
       </Suspense>
     );
@@ -107,6 +110,7 @@ export default async function StudentsPage({ searchParams }: StudentsPageProps) 
         search={query.search ?? ""}
         department={query.department ?? "all"}
         yearLevel={query.yearLevel ?? "all"}
+        scopedDepartment={scope}
       />
     </Suspense>
   );

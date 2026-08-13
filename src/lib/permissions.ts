@@ -249,22 +249,26 @@ export const HIGH_RISK_PERMISSIONS: PermissionKey[] = PERMISSION_DEFINITIONS.fil
   (p) => p.highRisk
 ).map((p) => p.key);
 
-/** Sensible starter set when creating a department admin. */
+/**
+ * Starter grants for new department admins.
+ * Matches the portal areas they operate: People, Checkers, Sessions,
+ * bulk import, and bulk attendance export (from Sessions).
+ * Overview and Audit Log are available to all portal users (no permission key).
+ */
 export const DEFAULT_DEPARTMENT_ADMIN_PERMISSIONS: PermissionKey[] = [
   "people.view",
   "people.create",
   "people.edit",
-  "qr.view",
-  "qr.generate",
-  "qr.export",
+  "checkers.view",
+  "checkers.manage",
+  "checkers.pin_manage",
   "sessions.view",
   "sessions.create",
   "sessions.edit",
   "attendance.view",
   "attendance.export",
-  "checkers.view",
-  "reports.view",
-  "reports.export",
+  "bulk_import.view",
+  "bulk_import.execute",
 ];
 
 export type AuthzProfile = Pick<AppUserProfile, "role"> & {
@@ -400,13 +404,18 @@ const CAPABILITY_TO_PERMISSIONS: Record<AdminCapability, PermissionKey[]> = {
   view_profile: [],
 };
 
+/** Capabilities every portal user (incl. department admin) may use. */
+const PORTAL_OPEN_CAPABILITIES: AdminCapability[] = [
+  "view_audit_log",
+  "view_profile",
+];
+
 const SUPER_ADMIN_ONLY_CAPABILITIES: AdminCapability[] = [
   "manage_departments",
   "manage_users",
   "manage_department_admins",
   "manage_system_settings",
   "view_campus_reports",
-  "view_audit_log",
 ];
 
 /**
@@ -420,7 +429,7 @@ export function canCapability(
   if (!profile || !isPortalRole(profile.role)) return false;
   if (profile.role === ADMIN_ROLE) return true;
   if (SUPER_ADMIN_ONLY_CAPABILITIES.includes(capability)) return false;
-  if (capability === "view_profile") return true;
+  if (PORTAL_OPEN_CAPABILITIES.includes(capability)) return true;
   const required = CAPABILITY_TO_PERMISSIONS[capability];
   if (!required.length) return false;
   return canAny(profile, required);

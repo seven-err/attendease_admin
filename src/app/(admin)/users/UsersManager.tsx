@@ -201,10 +201,16 @@ export function UsersManager({
     });
   }
 
-  function handleReset(userId: string) {
+  function handleReset(user: PortalUserRow) {
+    const confirmed = window.confirm(
+      `Reset password for ${user.full_name} (${user.email})?\n\nA temporary password will be shown once. Share it securely with the user.`
+    );
+    if (!confirmed) return;
+
     setError(null);
+    setSuccess(null);
     startTransition(async () => {
-      const result = await resetPortalUserPassword(userId);
+      const result = await resetPortalUserPassword(user.id);
       if (!result.success) {
         setError(result.error);
         return;
@@ -294,7 +300,9 @@ export function UsersManager({
                       type="button"
                       className="btn-icon"
                       title="Reset password"
-                      onClick={() => handleReset(user.id)}
+                      aria-label={`Reset password for ${user.full_name}`}
+                      disabled={isPending}
+                      onClick={() => handleReset(user)}
                     >
                       <KeyRound className="size-4" />
                     </button>

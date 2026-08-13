@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Pagination } from "@/components/ui/Pagination";
 import { AttendanceReportRow } from "@/lib/attendeaseTypes";
@@ -11,17 +11,26 @@ import {
 } from "@/lib/data/report-utils";
 import type { ReportsQueryParams } from "@/lib/data/reports";
 import {
+  displayAttendanceStatus,
+  displayAttendanceStatusLabel,
   formatDate,
-  formatDateTimeOrDash,
+  formatClockTimeOrDash,
+  formatTimeOutDisplay,
   resolvedAttendanceStatusVariant,
 } from "@/lib/format";
+import { NO_TIME_OUT_FILTER } from "@/lib/attendance";
 import { ExportSessionModal } from "@/components/reports/ExportSessionModal";
-import { useAttendanceRealtime, usePollingFallback } from "@/lib/hooks/useAttendanceRealtime";
 import { useListParams } from "@/lib/hooks/useListParams";
 import type { PageSize } from "@/lib/pagination";
-import { exportAttendanceReportRows } from "@/lib/export-attendance";
-import { exportReports, refreshReports } from "./actions";
+import {
+  buildAttendanceExportFilename,
+  exportAttendanceReportRows,
+  exportAttendanceSummaryRows,
+} from "@/lib/export-attendance";
+import { exportReports } from "./actions";
 import { Download, Search } from "lucide-react";
+import { ATTENDANCE_STATUSES } from "@/lib/attendeaseTypes";
+import type { ExportSessionSelection } from "@/components/reports/ExportSessionModal";
 
 type ReportsTableProps = {
   records: AttendanceReportRow[];
@@ -33,6 +42,8 @@ type ReportsTableProps = {
   sessions: ReportSessionOption[];
   recordCountBySession: Record<string, number>;
   query: ReportsQueryParams;
+  canExport?: boolean;
+  scopedDepartment?: string | null;
 };
 
 export function ReportsTable({
@@ -45,6 +56,8 @@ export function ReportsTable({
   sessions: initialSessions,
   recordCountBySession: initialRecordCountBySession,
   query,
+  canExport = false,
+  scopedDepartment = null,
 }: ReportsTableProps) {
   const [records, setRecords] = useState(initialRecords);
   const [stats, setStats] = useState(initialStats);
@@ -56,20 +69,6 @@ export function ReportsTable({
   const { searchInput, setSearchInput, setPage, setPageSize, updateParams } =
     useListParams(query.search ?? "");
   const [exportModalOpen, setExportModalOpen] = useState(false);
-
-  const reloadReports = useCallback(() => {
-    startTransition(async () => {
-      const result = await refreshReports(query);
-      if (!result.success) return;
-      setRecords(result.records);
-      setStats(result.stats);
-      setSessionOptions(result.sessions);
-      setRecordCountBySession(result.recordCountBySession);
-    });
-  }, [query]);
-
-  useAttendanceRealtime(reloadReports);
-  usePollingFallback(reloadReports, true, 5000);
 
   useEffect(() => {
     setRecords(initialRecords);
@@ -93,12 +92,40 @@ export function ReportsTable({
     });
   }
 
-  function exportSelectedSessions(sessionIds: string[]) {
-    startTransition(async () => {
-      const result = await exportReports(query, sessionIds);
-      if (!result.success) return;
-      exportAttendanceReportRows(result.records);
+  async function exportSelectedSessions({
+    sessionIds,
+    mode,
+    summaryColumns,
+  }: ExportSessionSelection): Promise<boolean> {
+    const result = await exportReports(query, sessionIds);
+    if (!result.success) return false;
+
+    const dateLabel =
+      query.fromDate === query.toDate
+        ? query.fromDate
+        : `${query.fromDate}_to_${query.toDate}`;
+    const filename = buildAttendanceExportFilename({
+      sessionTitle:
+        sessionIds.length === 1
+          ? (sessionOptions.find((s) => s.id === sessionIds[0])?.title ??
+            "attendance-report")
+          : "attendance-report",
+      date: dateLabel,
+      statusFilter: query.status,
+      exportMode: mode,
     });
+
+    if (mode === "summary") {
+      exportAttendanceSummaryRows(result.records, filename, {
+        // Total Sessions only applies when rolling up multiple sessions
+        // (typically sub-sessions under a main session).
+        includeTotalSessions: sessionIds.length > 1,
+        summaryColumns,
+      });
+    } else {
+      exportAttendanceReportRows(result.records, filename);
+    }
+    return true;
   }
 
   return (
@@ -111,24 +138,28 @@ export function ReportsTable({
             {isPending && " · Updating..."}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setExportModalOpen(true)}
-          disabled={sessionOptions.length === 0}
-          className="flex items-center gap-2 rounded bg-maroon px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
-        >
-          <Download className="size-4" />
-          Export CSV
-        </button>
+        {canExport && (
+          <button
+            type="button"
+            onClick={() => setExportModalOpen(true)}
+            disabled={sessionOptions.length === 0}
+            className="flex items-center gap-2 rounded bg-maroon px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+          >
+            <Download className="size-4" />
+            Export CSV
+          </button>
+        )}
       </div>
 
-      <ExportSessionModal
-        open={exportModalOpen}
-        onClose={() => setExportModalOpen(false)}
-        sessions={sessionOptions}
-        recordCountBySession={recordCountBySession}
-        onExport={exportSelectedSessions}
-      />
+      {canExport && (
+        <ExportSessionModal
+          open={exportModalOpen}
+          onClose={() => setExportModalOpen(false)}
+          sessions={sessionOptions}
+          recordCountBySession={recordCountBySession}
+          onExport={exportSelectedSessions}
+        />
+      )}
 
       <div className="flex flex-wrap items-end gap-4 rounded-[10px] border border-border bg-white p-4">
         <div className="min-w-[150px]">
@@ -165,16 +196,19 @@ export function ReportsTable({
         <div className="min-w-[150px]">
           <label className="mb-1 block text-sm font-bold">Department</label>
           <select
-            value={query.department ?? "all"}
+            value={scopedDepartment ?? query.department ?? "all"}
             onChange={(e) => updateFilter("dept", e.target.value)}
-            className="h-10 w-full rounded border border-border px-3 text-sm"
+            disabled={Boolean(scopedDepartment)}
+            className="h-10 w-full rounded border border-border px-3 text-sm disabled:bg-surface-raised disabled:text-text-muted"
           >
-            <option value="all">All departments</option>
-            {DEPARTMENTS.map((dept) => (
-              <option key={dept} value={dept}>
-                {dept}
-              </option>
-            ))}
+            {!scopedDepartment && <option value="all">All departments</option>}
+            {(scopedDepartment ? [scopedDepartment] : [...DEPARTMENTS]).map(
+              (dept) => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              )
+            )}
           </select>
         </div>
         <div className="min-w-[150px]">
@@ -215,25 +249,22 @@ export function ReportsTable({
             className="h-10 w-full rounded border border-border px-3 text-sm"
           >
             <option value="all">All status</option>
-            <option value="Present">Present</option>
-            <option value="On Time">On Time</option>
-            <option value="Late">Late</option>
-            <option value="Absent">Absent</option>
+            {ATTENDANCE_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {displayAttendanceStatusLabel(status)}
+              </option>
+            ))}
+            <option value={NO_TIME_OUT_FILTER}>{NO_TIME_OUT_FILTER}</option>
+            <option value="Voided">Voided</option>
           </select>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <div className="rounded-[10px] border border-border bg-white p-4">
           <p className="text-sm text-text-secondary">Present</p>
           <p className="mt-2 text-3xl font-bold text-green-600">
             {stats.presentPercent}%
-          </p>
-        </div>
-        <div className="rounded-[10px] border border-border bg-white p-4">
-          <p className="text-sm text-text-secondary">On Time</p>
-          <p className="mt-2 text-3xl font-bold text-green-600">
-            {stats.onTimePercent}%
           </p>
         </div>
         <div className="rounded-[10px] border border-border bg-white p-4">
@@ -243,9 +274,21 @@ export function ReportsTable({
           </p>
         </div>
         <div className="rounded-[10px] border border-border bg-white p-4">
+          <p className="text-sm text-text-secondary">Late (Excused)</p>
+          <p className="mt-2 text-3xl font-bold text-amber-700">
+            {stats.lateExcusedPercent}%
+          </p>
+        </div>
+        <div className="rounded-[10px] border border-border bg-white p-4">
           <p className="text-sm text-text-secondary">Absent</p>
           <p className="mt-2 text-3xl font-bold text-maroon">
             {stats.absentPercent}%
+          </p>
+        </div>
+        <div className="rounded-[10px] border border-border bg-white p-4">
+          <p className="text-sm text-text-secondary">No Time Out</p>
+          <p className="mt-2 text-3xl font-bold text-text-secondary">
+            {stats.noTimeOutPercent}%
           </p>
         </div>
         <div className="rounded-[10px] border border-border bg-white p-4">
@@ -276,6 +319,7 @@ export function ReportsTable({
                 <th className="px-4 py-3">Session</th>
                 <th className="px-4 py-3">Time In</th>
                 <th className="px-4 py-3">Time Out</th>
+                <th className="px-4 py-3">Scan By</th>
                 <th className="px-4 py-3">Status</th>
               </tr>
             </thead>
@@ -283,7 +327,7 @@ export function ReportsTable({
               {records.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     className="px-4 py-8 text-center text-text-secondary"
                   >
                     No attendance records found for the selected filters.
@@ -313,10 +357,13 @@ export function ReportsTable({
                       {record.session_title}
                     </td>
                     <td className="px-4 py-4 text-text-secondary">
-                      {formatDateTimeOrDash(record.time_in)}
+                      {formatClockTimeOrDash(record.time_in)}
                     </td>
                     <td className="px-4 py-4 text-text-secondary">
-                      {formatDateTimeOrDash(record.time_out)}
+                      {formatTimeOutDisplay(record.time_in, record.time_out)}
+                    </td>
+                    <td className="px-4 py-4 text-text-secondary">
+                      {record.scan_by ?? "—"}
                     </td>
                     <td className="px-4 py-4">
                       <Badge
@@ -324,7 +371,7 @@ export function ReportsTable({
                           record.attendance_status
                         )}
                       >
-                        {record.attendance_status.toUpperCase()}
+                        {displayAttendanceStatus(record.attendance_status)}
                       </Badge>
                     </td>
                   </tr>

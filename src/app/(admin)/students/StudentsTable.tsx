@@ -30,6 +30,7 @@ type StudentsTableProps = {
   search: string;
   department: string;
   yearLevel: string;
+  scopedDepartment?: string | null;
 };
 
 export function StudentsTable({
@@ -41,6 +42,7 @@ export function StudentsTable({
   search,
   department,
   yearLevel,
+  scopedDepartment = null,
 }: StudentsTableProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -52,6 +54,11 @@ export function StudentsTable({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
+
+  const deptOptions = scopedDepartment
+    ? [scopedDepartment]
+    : [...DEPARTMENTS];
+  const effectiveDepartment = scopedDepartment ?? department;
 
   function openAddModal() {
     setSelectedStudent(null);
@@ -167,11 +174,12 @@ export function StudentsTable({
 
           <select
             className="select-field min-w-[180px]"
-            value={department}
+            value={effectiveDepartment}
             onChange={(e) => updateFilter("dept", e.target.value)}
+            disabled={Boolean(scopedDepartment)}
           >
-            <option value="all">All departments</option>
-            {DEPARTMENTS.map((dept) => (
+            {!scopedDepartment && <option value="all">All departments</option>}
+            {deptOptions.map((dept) => (
               <option key={dept} value={dept}>
                 {dept}
               </option>
@@ -358,6 +366,8 @@ export function StudentsTable({
           formId={formId}
           student={selectedStudent}
           onSubmit={handleSave}
+          allowedDepartments={deptOptions}
+          lockedDepartment={scopedDepartment}
         />
       </Modal>
     </>

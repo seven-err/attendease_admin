@@ -105,8 +105,8 @@ export function ImportCsvModal({ open, onClose, onImported }: ImportCsvModalProp
     >
       <div className="space-y-4">
         <p className="text-sm text-text-secondary">
-          Upload a CSV with columns for student number, full name, department,
-          course, year level, and optional status.
+          Upload a CSV with full name, department, course, year level, and
+          optional status. Student numbers are auto-generated as YYYY-0000.
         </p>
 
         <div className="flex flex-wrap gap-2">

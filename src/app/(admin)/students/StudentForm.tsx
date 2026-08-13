@@ -15,6 +15,8 @@ type StudentFormProps = {
   formId: string;
   student?: StudentWithAcademic | null;
   onSubmit: (formData: FormData) => void;
+  allowedDepartments?: readonly string[];
+  lockedDepartment?: string | null;
 };
 
 function defaultValues(student?: StudentWithAcademic | null): StudentFormInput {
@@ -29,8 +31,27 @@ function defaultValues(student?: StudentWithAcademic | null): StudentFormInput {
   };
 }
 
-export function StudentForm({ formId, student, onSubmit }: StudentFormProps) {
+function previewStudentNumber(academicYear: string): string {
+  const yearPrefix =
+    academicYear.split("-")[0] || String(new Date().getFullYear());
+  return `${yearPrefix}-####`;
+}
+
+export function StudentForm({
+  formId,
+  student,
+  onSubmit,
+  allowedDepartments = DEPARTMENTS,
+  lockedDepartment = null,
+}: StudentFormProps) {
   const values = defaultValues(student);
+  const departmentOptions = lockedDepartment
+    ? [lockedDepartment]
+    : [...allowedDepartments];
+  const defaultDepartment =
+    lockedDepartment ||
+    values.department ||
+    (departmentOptions.length === 1 ? departmentOptions[0] : "");
 
   return (
     <form
@@ -53,12 +74,16 @@ export function StudentForm({ formId, student, onSubmit }: StudentFormProps) {
         <div>
           <label className="mb-1 block text-sm font-bold">Student #</label>
           <input
-            name="student_number"
-            defaultValue={values.student_number}
-            placeholder="e.g. 2026-0001"
-            required
-            className={inputClass}
+            value={
+              student?.student_number ||
+              previewStudentNumber(values.academic_year)
+            }
+            readOnly
+            className={`${inputClass} bg-gray-50 font-mono text-xs text-text-secondary`}
           />
+          <p className="mt-1 text-xs text-text-muted">
+            Auto-formatted as YYYY-0000 when saved.
+          </p>
         </div>
         <div>
           <label className="mb-1 block text-sm font-bold">Status</label>
@@ -92,17 +117,21 @@ export function StudentForm({ formId, student, onSubmit }: StudentFormProps) {
           <label className="mb-1 block text-sm font-bold">Department</label>
           <select
             name="department"
-            defaultValue={values.department}
+            defaultValue={defaultDepartment}
             required
+            disabled={Boolean(lockedDepartment)}
             className={inputClass}
           >
-            <option value="">Select department</option>
-            {DEPARTMENTS.map((dept) => (
+            {!lockedDepartment && <option value="">Select department</option>}
+            {departmentOptions.map((dept) => (
               <option key={dept} value={dept}>
                 {dept}
               </option>
             ))}
           </select>
+          {lockedDepartment && (
+            <input type="hidden" name="department" value={lockedDepartment} />
+          )}
         </div>
         <div>
           <label className="mb-1 block text-sm font-bold">Course</label>

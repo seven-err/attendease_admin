@@ -13,7 +13,13 @@ import {
   type StudentImportResult,
 } from "@/lib/validations/student-import";
 import {
+  parseStaffImportCsv,
+  staffImportCsvTemplate,
+  type StaffImportPreview,
+} from "@/lib/validations/staff-import";
+import {
   executeBulkImport,
+  type ImportKind,
   validateBulkImportCsv,
 } from "./actions";
 import { Download, FileUp, CheckCircle2 } from "lucide-react";
@@ -50,14 +56,24 @@ export function BulkImportWizard({
   const [isPending, startTransition] = useTransition();
   const [step, setStep] = useState<Step>("upload");
   const [csvText, setCsvText] = useState("");
+  const [importKind, setImportKind] = useState<ImportKind>("students");
   const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<StudentImportPreview | null>(null);
+  const [preview, setPreview] = useState<
+    StudentImportPreview | StaffImportPreview | null
+  >(null);
   const [result, setResult] = useState<StudentImportResult | null>(null);
 
   const clientPreview = useMemo(() => {
     if (!csvText.trim()) return null;
-    return parseStudentImportCsv(csvText);
-  }, [csvText]);
+    return importKind === "employees"
+      ? parseStaffImportCsv(csvText)
+      : parseStudentImportCsv(csvText);
+  }, [csvText, importKind]);
+
+  const isEmployeeImport = importKind === "employees";
+  const template = isEmployeeImport
+    ? staffImportCsvTemplate()
+    : studentImportCsvTemplate();
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -78,7 +94,7 @@ export function BulkImportWizard({
     setError(null);
     startTransition(async () => {
       setStep("validate");
-      const validation = await validateBulkImportCsv(csvText);
+      const validation = await validateBulkImportCsv(csvText, importKind);
       if (!validation.success) {
         setError(validation.error);
         setStep("upload");
@@ -105,7 +121,7 @@ export function BulkImportWizard({
     setError(null);
     setStep("import");
     startTransition(async () => {
-      const importResult = await executeBulkImport(csvText);
+      const importResult = await executeBulkImport(csvText, importKind);
       setResult(importResult);
       setStep("summary");
       if (importResult.success) {
@@ -122,8 +138,8 @@ export function BulkImportWizard({
         title="Bulk Import"
         description={
           scopedDepartment
-            ? `Import students into ${scopedDepartment} only`
-            : "Validate and import student roster CSVs"
+            ? `Import people into ${scopedDepartment} only`
+            : "Validate and import roster CSVs"
         }
       />
 
@@ -151,12 +167,39 @@ export function BulkImportWizard({
       {step === "upload" && (
         <div className="card space-y-4 p-5">
           <p className="text-sm text-text-secondary">
-            Upload a CSV with student number, full name, department, course,
-            year level, and optional status.
+            Upload a CSV for students or employees. Employee numbers are
+            generated as EMP-DEPARTMENT-001 after the department is selected in
+            the CSV.
             {scopedDepartment
               ? ` Rows outside ${scopedDepartment} will be rejected.`
               : ""}
           </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setImportKind("students");
+                setCsvText("");
+                setPreview(null);
+                setResult(null);
+              }}
+              className={importKind === "students" ? "btn btn-primary" : "btn btn-ghost"}
+            >
+              Students
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setImportKind("employees");
+                setCsvText("");
+                setPreview(null);
+                setResult(null);
+              }}
+              className={importKind === "employees" ? "btn btn-primary" : "btn btn-ghost"}
+            >
+              Employees
+            </button>
+          </div>
           <div className="flex flex-wrap gap-2">
             <label className="btn btn-secondary cursor-pointer">
               <FileUp className="size-4" />
@@ -172,8 +215,10 @@ export function BulkImportWizard({
               variant="ghost"
               onClick={() =>
                 downloadCsv(
-                  "student-import-template.csv",
-                  studentImportCsvTemplate()
+                  isEmployeeImport
+                    ? "employee-import-template.csv"
+                    : "student-import-template.csv",
+                  template
                 )
               }
             >
@@ -188,7 +233,7 @@ export function BulkImportWizard({
               setError(null);
             }}
             rows={10}
-            placeholder={studentImportCsvTemplate()}
+            placeholder={template}
             className="w-full rounded border border-border px-3 py-2 font-mono text-xs outline-none focus:border-maroon"
           />
           {clientPreview && (
@@ -257,11 +302,17 @@ export function BulkImportWizard({
                 <thead className="bg-header-bg text-left text-xs uppercase text-text-secondary">
                   <tr>
                     <th className="px-3 py-2">#</th>
-                    <th className="px-3 py-2">Student #</th>
+                    <th className="px-3 py-2">
+                      {isEmployeeImport ? "Employee #" : "Student #"}
+                    </th>
                     <th className="px-3 py-2">Name</th>
                     <th className="px-3 py-2">Dept</th>
-                    <th className="px-3 py-2">Course</th>
-                    <th className="px-3 py-2">Year</th>
+                    <th className="px-3 py-2">
+                      {isEmployeeImport ? "Job Title" : "Course"}
+                    </th>
+                    <th className="px-3 py-2">
+                      {isEmployeeImport ? "Status" : "Year"}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -269,12 +320,18 @@ export function BulkImportWizard({
                     <tr key={row.rowNumber} className="border-t border-border">
                       <td className="px-3 py-2 font-mono">{row.rowNumber}</td>
                       <td className="px-3 py-2 font-mono">
-                        {row.student_number}
+                        {"student_number" in row
+                          ? row.student_number
+                          : `EMP-${row.department}-...`}
                       </td>
                       <td className="px-3 py-2 font-bold">{row.full_name}</td>
                       <td className="px-3 py-2">{row.department}</td>
-                      <td className="px-3 py-2">{row.course}</td>
-                      <td className="px-3 py-2">{row.year_level}</td>
+                      <td className="px-3 py-2">
+                        {"course" in row ? row.course : row.job_title}
+                      </td>
+                      <td className="px-3 py-2">
+                        {"year_level" in row ? row.year_level : row.person_status}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -314,7 +371,8 @@ export function BulkImportWizard({
             <span className="font-bold text-foreground">
               {preview.rows.length}
             </span>{" "}
-            student{preview.rows.length !== 1 ? "s" : ""}.
+            {isEmployeeImport ? "employee" : "student"}
+            {preview.rows.length !== 1 ? "s" : ""}.
             {preview.errors.length > 0
               ? ` ${preview.errors.length} row issue(s) will be skipped.`
               : ""}
@@ -342,7 +400,7 @@ export function BulkImportWizard({
 
       {step === "import" && (
         <div className="card p-8 text-center text-sm text-text-secondary">
-          Importing students...
+          Importing {isEmployeeImport ? "employees" : "students"}...
         </div>
       )}
 

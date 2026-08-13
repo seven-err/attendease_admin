@@ -9,6 +9,9 @@ export type SessionActionResult =
   | { success: true }
   | { success: false; error: string };
 
+/** Must be typed exactly by the user before session delete actions run. */
+export const SESSION_DELETE_CONFIRMATION = "confirm deletion";
+
 export type SessionFormInput = {
   title: string;
   description: string;

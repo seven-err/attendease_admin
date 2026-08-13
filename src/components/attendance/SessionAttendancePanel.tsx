@@ -1,33 +1,43 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
-import { Badge } from "@/components/ui/Badge";
 import { AttendanceRosterTable } from "@/components/attendance/AttendanceRosterTable";
 import {
   AttendanceRosterFilters,
   useAttendanceRosterFilters,
 } from "@/components/attendance/AttendanceRosterFilters";
+import {
+  ExportModeModal,
+  type ExportModeSelection,
+} from "@/components/reports/ExportModeModal";
 import { SessionAttendanceRow } from "@/lib/attendeaseTypes";
-import { useAttendanceRealtime, usePollingFallback } from "@/lib/hooks/useAttendanceRealtime";
+import {
+  FALLBACK_POLL_MS,
+  useAttendanceRealtime,
+  usePollingFallback,
+} from "@/lib/hooks/useAttendanceRealtime";
 import { fetchSessionAttendance } from "@/app/(admin)/sessions/actions";
 import { summarizeAttendanceStatuses } from "@/lib/attendance";
-import { exportSessionRosterRows, slugifyFilename } from "@/lib/export-attendance";
+import { exportSessionRosterRows } from "@/lib/export-attendance";
 import { Download } from "lucide-react";
 
 type SessionAttendancePanelProps = {
   sessionId: string;
   sessionTitle: string;
   sessionDate?: string;
+  mainSessionName?: string | null;
 };
 
 export function SessionAttendancePanel({
   sessionId,
   sessionTitle,
   sessionDate,
+  mainSessionName,
 }: SessionAttendancePanelProps) {
   const [rows, setRows] = useState<SessionAttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   const {
@@ -37,6 +47,7 @@ export function SessionAttendancePanel({
     setYearFilter,
     statusFilter,
     setStatusFilter,
+    summaryRows,
     filteredRows,
   } = useAttendanceRosterFilters(rows);
 
@@ -59,20 +70,13 @@ export function SessionAttendancePanel({
     loadRoster();
   }, [loadRoster]);
 
-  useAttendanceRealtime(loadRoster, sessionId);
-  usePollingFallback(loadRoster, true, 5000);
+  const { realtimeReady } = useAttendanceRealtime(loadRoster, sessionId);
+  usePollingFallback(loadRoster, realtimeReady === false, FALLBACK_POLL_MS);
 
-  const displaySummary = useMemo(() => {
-    const summary = summarizeAttendanceStatuses(
-      filteredRows.map((row) => row.attendance_status)
-    );
-    return {
-      present: summary.present,
-      onTime: summary.onTime,
-      late: summary.late,
-      absent: summary.absent,
-    };
-  }, [filteredRows]);
+  const displaySummary = useMemo(
+    () => summarizeAttendanceStatuses(summaryRows),
+    [summaryRows]
+  );
 
   if (loading && rows.length === 0) {
     return (
@@ -90,20 +94,19 @@ export function SessionAttendancePanel({
     );
   }
 
-  function handleExport() {
-    const base = sessionDate
-      ? `${sessionDate}-${sessionTitle}`
-      : sessionTitle;
-    exportSessionRosterRows(
-      filteredRows,
-      sessionTitle,
-      `attendance-${slugifyFilename(base)}.csv`
-    );
+  function handleExport({ mode, summaryColumns }: ExportModeSelection) {
+    exportSessionRosterRows(filteredRows, sessionTitle, {
+      mainSessionName,
+      date: sessionDate,
+      statusFilter,
+      exportMode: mode,
+      summaryColumns,
+    });
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
         <div className="min-w-0 flex-1">
           <AttendanceRosterFilters
             search={search}
@@ -117,45 +120,59 @@ export function SessionAttendancePanel({
         </div>
         <button
           type="button"
-          onClick={handleExport}
+          onClick={() => setExportModalOpen(true)}
           disabled={filteredRows.length === 0}
-          className="flex shrink-0 items-center gap-2 rounded border border-maroon px-4 py-2 text-sm font-bold text-maroon disabled:opacity-60"
+          className="flex w-full shrink-0 items-center justify-center gap-2 rounded border border-maroon px-4 py-2 text-sm font-bold text-maroon disabled:opacity-60 sm:w-auto"
         >
           <Download className="size-4" />
           Export CSV
         </button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded border border-border px-3 py-2 text-sm">
-          <p className="text-text-secondary">Present</p>
-          <p className="text-xl font-bold text-green-600">
+      <ExportModeModal
+        open={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        onExport={handleExport}
+        disabled={filteredRows.length === 0}
+        recordCount={filteredRows.length}
+      />
+
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-5">
+        <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+          <p className="truncate text-text-secondary">Present</p>
+          <p className="text-xl font-bold tabular-nums text-green-600">
             {displaySummary.present}
           </p>
         </div>
-        <div className="rounded border border-border px-3 py-2 text-sm">
-          <p className="text-text-secondary">On Time</p>
-          <p className="text-xl font-bold text-green-600">
-            {displaySummary.onTime}
-          </p>
-        </div>
-        <div className="rounded border border-border px-3 py-2 text-sm">
-          <p className="text-text-secondary">Late</p>
-          <p className="text-xl font-bold text-red-500">
+        <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+          <p className="truncate text-text-secondary">Late</p>
+          <p className="text-xl font-bold tabular-nums text-red-500">
             {displaySummary.late}
           </p>
         </div>
-        <div className="rounded border border-border px-3 py-2 text-sm">
-          <p className="text-text-secondary">Absent</p>
-          <p className="text-xl font-bold text-maroon">
+        <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+          <p className="truncate text-text-secondary">Late (Excused)</p>
+          <p className="text-xl font-bold tabular-nums text-amber-700">
+            {displaySummary.lateExcused}
+          </p>
+        </div>
+        <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+          <p className="truncate text-text-secondary">Absent</p>
+          <p className="text-xl font-bold tabular-nums text-maroon">
             {displaySummary.absent}
+          </p>
+        </div>
+        <div className="col-span-2 min-w-0 rounded border border-border px-3 py-2 text-sm lg:col-span-1">
+          <p className="truncate text-text-secondary">No Time Out</p>
+          <p className="text-xl font-bold tabular-nums text-text-secondary">
+            {displaySummary.noTimeOut}
           </p>
         </div>
       </div>
 
       <p className="text-xs text-text-muted">
-        Present is recorded only when both time in and time out are completed.
-        Showing {filteredRows.length} of {rows.length} students.
+        Present means timed in on time (with or without time out). Showing{" "}
+        {filteredRows.length} of {rows.length} students.
       </p>
 
       <AttendanceRosterTable rows={filteredRows} />

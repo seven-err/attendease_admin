@@ -13,6 +13,7 @@ import {
   isSuperAdmin,
   scopedDepartment,
 } from "@/lib/permissions";
+import { isPinUndoWithinWindow } from "@/lib/checker-pin";
 
 export type CheckerActionResult =
   | {
@@ -20,6 +21,11 @@ export type CheckerActionResult =
       tempPassword?: string;
       tempPin?: string;
       profilesReset?: number;
+      profilesRestored?: number;
+      canUndoPin?: boolean;
+      checkerId?: string;
+      profileId?: string;
+      profileDisplayName?: string;
     }
   | { success: false; error: string };
 
@@ -32,6 +38,21 @@ async function requireCheckerManager(): Promise<
       error: {
         success: false,
         error: "You don't have permission to manage checker accounts.",
+      },
+    };
+  }
+  return { profile };
+}
+
+async function requireCheckerPinManager(): Promise<
+  { profile: PortalProfile } | { error: CheckerActionResult }
+> {
+  const profile = await getPortalProfile();
+  if (!profile || !can(profile, "checkers.pin_manage")) {
+    return {
+      error: {
+        success: false,
+        error: "You don't have permission to manage checker PINs.",
       },
     };
   }
@@ -101,6 +122,30 @@ function generateTempPin(): string {
   return String(randomInt(0, 10_000)).padStart(4, "0");
 }
 
+async function createHashedTempPin(
+  adminClient: ReturnType<typeof createAdminClient>
+): Promise<
+  { tempPin: string; salt: string; pinHash: string } | { error: string }
+> {
+  const tempPin = generateTempPin();
+  const { data: salt, error: saltError } = await adminClient.rpc(
+    "generate_checker_pin_salt"
+  );
+  if (saltError || typeof salt !== "string" || !salt) {
+    return { error: saltError?.message ?? "Failed to generate PIN salt." };
+  }
+
+  const { data: pinHash, error: hashError } = await adminClient.rpc(
+    "hash_checker_pin",
+    { p_pin: tempPin, p_salt: salt }
+  );
+  if (hashError || typeof pinHash !== "string" || !pinHash) {
+    return { error: hashError?.message ?? "Failed to hash PIN." };
+  }
+
+  return { tempPin, salt, pinHash };
+}
+
 function checkerScopeFromRow(
   scope: string | null | undefined
 ): "department" | "ssg" | "employee" {
@@ -153,6 +198,75 @@ async function loadCheckerForManage(
   return { checker: existing };
 }
 
+async function loadProfileForPinManage(
+  profileId: string,
+  portalProfile: PortalProfile
+): Promise<
+  | {
+      row: {
+        id: string;
+        account_id: string;
+        display_name: string;
+        pin_hash: string | null;
+        pin_salt: string | null;
+        pin_updated_at: string | null;
+        previous_pin_hash: string | null;
+        previous_pin_salt: string | null;
+        previous_pin_updated_at: string | null;
+        pin_reset_at: string | null;
+      };
+      checker: {
+        id: string;
+        email: string;
+        department: string | null;
+        checker_scope: string | null;
+      };
+    }
+  | { error: CheckerActionResult }
+> {
+  if (!profileId) {
+    return { error: { success: false, error: "Profile ID is required." } };
+  }
+
+  let adminClient;
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return {
+      error: {
+        success: false,
+        error:
+          "Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to your environment variables.",
+      },
+    };
+  }
+
+  const { data: row, error } = await adminClient
+    .from("checker_profiles")
+    .select(
+      "id, account_id, display_name, pin_hash, pin_salt, pin_updated_at, previous_pin_hash, previous_pin_salt, previous_pin_updated_at, pin_reset_at"
+    )
+    .eq("id", profileId)
+    .maybeSingle();
+
+  if (error) {
+    return {
+      error: {
+        success: false,
+        error: error.message ?? "Failed to load checker profile.",
+      },
+    };
+  }
+  if (!row?.account_id) {
+    return { error: { success: false, error: "Checker profile not found." } };
+  }
+
+  const loaded = await loadCheckerForManage(row.account_id, portalProfile);
+  if ("error" in loaded) return loaded;
+
+  return { row, checker: loaded.checker };
+}
+
 export async function createChecker(
   formData: FormData
 ): Promise<CheckerActionResult> {
@@ -185,11 +299,18 @@ export async function createChecker(
     };
   }
 
+  // auth.users insert fires handle_new_user(), which creates public.users.
+  // Upsert the checker profile instead of inserting (avoids users_pkey).
   const { data: authData, error: signUpError } =
     await adminClient.auth.admin.createUser({
       email: parsed.email,
       password: tempPassword,
       email_confirm: true,
+      user_metadata: {
+        full_name: parsed.full_name,
+        role: CHECKER_ROLE,
+        department: parsed.department,
+      },
     });
 
   if (signUpError || !authData.user) {
@@ -201,16 +322,20 @@ export async function createChecker(
 
   const userId = authData.user.id;
 
-  const { error: profileError } = await adminClient.from("users").insert({
-    id: userId,
-    full_name: parsed.full_name,
-    email: parsed.email,
-    role: CHECKER_ROLE,
-    status: "active",
-    department: parsed.department,
-    checker_scope: parsed.checker_scope,
-    checker_audience: parsed.checker_audience,
-  });
+  const { error: profileError } = await adminClient.from("users").upsert(
+    {
+      id: userId,
+      full_name: parsed.full_name,
+      email: parsed.email,
+      role: CHECKER_ROLE,
+      status: "active",
+      department: parsed.department,
+      checker_scope: parsed.checker_scope,
+      checker_audience: parsed.checker_audience,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" }
+  );
 
   if (profileError) {
     await adminClient.auth.admin.deleteUser(userId);
@@ -348,13 +473,9 @@ export async function updateChecker(
 export async function resetCheckerPassword(
   checkerId: string
 ): Promise<CheckerActionResult> {
-  const profile = await getPortalProfile();
-  if (!profile || !isSuperAdmin(profile)) {
-    return {
-      success: false,
-      error: "Only super admins can reset checker passwords.",
-    };
-  }
+  const auth = await requireCheckerManager();
+  if ("error" in auth) return auth.error;
+  const { profile } = auth;
   if (!checkerId) return { success: false, error: "Checker ID is required." };
 
   const loaded = await loadCheckerForManage(checkerId, profile);
@@ -395,13 +516,9 @@ export async function resetCheckerPassword(
 export async function resetCheckerPins(
   checkerId: string
 ): Promise<CheckerActionResult> {
-  const profile = await getPortalProfile();
-  if (!profile || !isSuperAdmin(profile)) {
-    return {
-      success: false,
-      error: "Only super admins can reset checker PINs.",
-    };
-  }
+  const auth = await requireCheckerPinManager();
+  if ("error" in auth) return auth.error;
+  const { profile } = auth;
   if (!checkerId) return { success: false, error: "Checker ID is required." };
 
   const loaded = await loadCheckerForManage(checkerId, profile);
@@ -421,7 +538,7 @@ export async function resetCheckerPins(
 
   const { data: profiles, error: listError } = await adminClient
     .from("checker_profiles")
-    .select("id")
+    .select("id, pin_hash, pin_salt, pin_updated_at")
     .eq("account_id", checkerId);
 
   if (listError) {
@@ -437,46 +554,43 @@ export async function resetCheckerPins(
     };
   }
 
-  const tempPin = generateTempPin();
-  const { data: salt, error: saltError } = await adminClient.rpc(
-    "generate_checker_pin_salt"
-  );
-  if (saltError || typeof salt !== "string" || !salt) {
-    return {
-      success: false,
-      error: saltError?.message ?? "Failed to generate PIN salt.",
-    };
+  const hashed = await createHashedTempPin(adminClient);
+  if ("error" in hashed) {
+    return { success: false, error: hashed.error };
   }
-
-  const { data: pinHash, error: hashError } = await adminClient.rpc(
-    "hash_checker_pin",
-    { p_pin: tempPin, p_salt: salt }
-  );
-  if (hashError || typeof pinHash !== "string" || !pinHash) {
-    return {
-      success: false,
-      error: hashError?.message ?? "Failed to hash PIN.",
-    };
-  }
+  const { tempPin, salt, pinHash } = hashed;
 
   const now = new Date().toISOString();
-  const { error: updateError } = await adminClient
-    .from("checker_profiles")
-    .update({
-      pin_salt: salt,
-      pin_hash: pinHash,
-      pin_updated_at: now,
-      failed_pin_attempts: 0,
-      pin_locked_until: null,
-      setup_completed_at: now,
-    })
-    .eq("account_id", checkerId);
+  let profilesReset = 0;
+  let canUndoPin = false;
 
-  if (updateError) {
-    return {
-      success: false,
-      error: updateError.message ?? "Failed to reset PINs.",
-    };
+  for (const row of profiles) {
+    const hadPreviousPin = Boolean(row.pin_hash && row.pin_salt);
+    const { error: updateError } = await adminClient
+      .from("checker_profiles")
+      .update({
+        previous_pin_hash: hadPreviousPin ? row.pin_hash : null,
+        previous_pin_salt: hadPreviousPin ? row.pin_salt : null,
+        previous_pin_updated_at: hadPreviousPin ? row.pin_updated_at : null,
+        pin_reset_at: now,
+        pin_salt: salt,
+        pin_hash: pinHash,
+        pin_updated_at: now,
+        failed_pin_attempts: 0,
+        pin_locked_until: null,
+        setup_completed_at: now,
+      })
+      .eq("id", row.id)
+      .eq("account_id", checkerId);
+
+    if (updateError) {
+      return {
+        success: false,
+        error: updateError.message ?? "Failed to reset PINs.",
+      };
+    }
+    profilesReset += 1;
+    if (hadPreviousPin) canUndoPin = true;
   }
 
   await writeAuditLog(profile, {
@@ -486,7 +600,8 @@ export async function resetCheckerPins(
     department: checker.department,
     metadata: {
       email: checker.email,
-      profilesReset: profiles.length,
+      profilesReset,
+      undoAvailable: canUndoPin,
     },
   });
 
@@ -494,7 +609,295 @@ export async function resetCheckerPins(
   return {
     success: true,
     tempPin,
-    profilesReset: profiles.length,
+    profilesReset,
+    canUndoPin,
+    checkerId,
+  };
+}
+
+/** Reset PIN for a single checker_profiles row (moderator or checker). */
+export async function resetCheckerProfilePin(
+  profileId: string
+): Promise<CheckerActionResult> {
+  const auth = await requireCheckerPinManager();
+  if ("error" in auth) return auth.error;
+  const { profile } = auth;
+
+  const loaded = await loadProfileForPinManage(profileId, profile);
+  if ("error" in loaded) return loaded.error;
+  const { row, checker } = loaded;
+
+  let adminClient;
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return {
+      success: false,
+      error:
+        "Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to your environment variables.",
+    };
+  }
+
+  const hashed = await createHashedTempPin(adminClient);
+  if ("error" in hashed) {
+    return { success: false, error: hashed.error };
+  }
+  const { tempPin, salt, pinHash } = hashed;
+
+  const now = new Date().toISOString();
+  const hadPreviousPin = Boolean(row.pin_hash && row.pin_salt);
+
+  const { error: updateError } = await adminClient
+    .from("checker_profiles")
+    .update({
+      previous_pin_hash: hadPreviousPin ? row.pin_hash : null,
+      previous_pin_salt: hadPreviousPin ? row.pin_salt : null,
+      previous_pin_updated_at: hadPreviousPin ? row.pin_updated_at : null,
+      pin_reset_at: now,
+      pin_salt: salt,
+      pin_hash: pinHash,
+      pin_updated_at: now,
+      failed_pin_attempts: 0,
+      pin_locked_until: null,
+      setup_completed_at: now,
+    })
+    .eq("id", row.id)
+    .eq("account_id", checker.id);
+
+  if (updateError) {
+    return {
+      success: false,
+      error: updateError.message ?? "Failed to reset PIN.",
+    };
+  }
+
+  await writeAuditLog(profile, {
+    action: "checker.reset_profile_pin",
+    targetType: "user",
+    targetId: checker.id,
+    department: checker.department,
+    metadata: {
+      email: checker.email,
+      profileId: row.id,
+      displayName: row.display_name,
+      undoAvailable: hadPreviousPin,
+    },
+  });
+
+  revalidatePath("/checkers");
+  return {
+    success: true,
+    tempPin,
+    profilesReset: 1,
+    canUndoPin: hadPreviousPin,
+    checkerId: checker.id,
+    profileId: row.id,
+    profileDisplayName: row.display_name,
+  };
+}
+
+export async function restoreCheckerPins(
+  checkerId: string
+): Promise<CheckerActionResult> {
+  const auth = await requireCheckerPinManager();
+  if ("error" in auth) return auth.error;
+  const { profile } = auth;
+  if (!checkerId) return { success: false, error: "Checker ID is required." };
+
+  const loaded = await loadCheckerForManage(checkerId, profile);
+  if ("error" in loaded) return loaded.error;
+  const { checker } = loaded;
+
+  let adminClient;
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return {
+      success: false,
+      error:
+        "Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to your environment variables.",
+    };
+  }
+
+  const { data: profiles, error: listError } = await adminClient
+    .from("checker_profiles")
+    .select(
+      "id, previous_pin_hash, previous_pin_salt, previous_pin_updated_at, pin_reset_at"
+    )
+    .eq("account_id", checkerId);
+
+  if (listError) {
+    return {
+      success: false,
+      error: listError.message ?? "Failed to load checker profiles.",
+    };
+  }
+  if (!profiles?.length) {
+    return {
+      success: false,
+      error: "No checker profiles found for this account.",
+    };
+  }
+
+  const restorable = profiles.filter(
+    (row) =>
+      Boolean(row.previous_pin_hash && row.previous_pin_salt) &&
+      isPinUndoWithinWindow(row.pin_reset_at)
+  );
+
+  if (!restorable.length) {
+    return {
+      success: false,
+      error:
+        "No previous PIN is available to restore. Undo may have expired or already been used.",
+    };
+  }
+
+  const now = new Date().toISOString();
+  let profilesRestored = 0;
+
+  for (const row of restorable) {
+    const { error: updateError } = await adminClient
+      .from("checker_profiles")
+      .update({
+        pin_hash: row.previous_pin_hash,
+        pin_salt: row.previous_pin_salt,
+        pin_updated_at: row.previous_pin_updated_at ?? now,
+        failed_pin_attempts: 0,
+        pin_locked_until: null,
+        previous_pin_hash: null,
+        previous_pin_salt: null,
+        previous_pin_updated_at: null,
+        pin_reset_at: null,
+      })
+      .eq("id", row.id)
+      .eq("account_id", checkerId);
+
+    if (updateError) {
+      return {
+        success: false,
+        error: updateError.message ?? "Failed to restore previous PIN.",
+      };
+    }
+    profilesRestored += 1;
+  }
+
+  // Clear stale previous-PIN snapshots on sibling profiles (expired / missing).
+  const staleIds = profiles
+    .filter((row) => !restorable.some((r) => r.id === row.id))
+    .filter((row) => row.previous_pin_hash || row.previous_pin_salt)
+    .map((row) => row.id);
+
+  if (staleIds.length) {
+    await adminClient
+      .from("checker_profiles")
+      .update({
+        previous_pin_hash: null,
+        previous_pin_salt: null,
+        previous_pin_updated_at: null,
+        pin_reset_at: null,
+      })
+      .in("id", staleIds);
+  }
+
+  await writeAuditLog(profile, {
+    action: "checker.restore_pins",
+    targetType: "user",
+    targetId: checkerId,
+    department: checker.department,
+    metadata: {
+      email: checker.email,
+      profilesRestored,
+    },
+  });
+
+  revalidatePath("/checkers");
+  return {
+    success: true,
+    profilesRestored,
+    checkerId,
+  };
+}
+
+/** Restore previous PIN for a single checker_profiles row. */
+export async function restoreCheckerProfilePin(
+  profileId: string
+): Promise<CheckerActionResult> {
+  const auth = await requireCheckerPinManager();
+  if ("error" in auth) return auth.error;
+  const { profile } = auth;
+
+  const loaded = await loadProfileForPinManage(profileId, profile);
+  if ("error" in loaded) return loaded.error;
+  const { row, checker } = loaded;
+
+  if (
+    !row.previous_pin_hash ||
+    !row.previous_pin_salt ||
+    !isPinUndoWithinWindow(row.pin_reset_at)
+  ) {
+    return {
+      success: false,
+      error:
+        "No previous PIN is available to restore. Undo may have expired or already been used.",
+    };
+  }
+
+  let adminClient;
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return {
+      success: false,
+      error:
+        "Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to your environment variables.",
+    };
+  }
+
+  const now = new Date().toISOString();
+  const { error: updateError } = await adminClient
+    .from("checker_profiles")
+    .update({
+      pin_hash: row.previous_pin_hash,
+      pin_salt: row.previous_pin_salt,
+      pin_updated_at: row.previous_pin_updated_at ?? now,
+      failed_pin_attempts: 0,
+      pin_locked_until: null,
+      previous_pin_hash: null,
+      previous_pin_salt: null,
+      previous_pin_updated_at: null,
+      pin_reset_at: null,
+    })
+    .eq("id", row.id)
+    .eq("account_id", checker.id);
+
+  if (updateError) {
+    return {
+      success: false,
+      error: updateError.message ?? "Failed to restore previous PIN.",
+    };
+  }
+
+  await writeAuditLog(profile, {
+    action: "checker.restore_profile_pin",
+    targetType: "user",
+    targetId: checker.id,
+    department: checker.department,
+    metadata: {
+      email: checker.email,
+      profileId: row.id,
+      displayName: row.display_name,
+      profilesRestored: 1,
+    },
+  });
+
+  revalidatePath("/checkers");
+  return {
+    success: true,
+    profilesRestored: 1,
+    checkerId: checker.id,
+    profileId: row.id,
+    profileDisplayName: row.display_name,
   };
 }
 

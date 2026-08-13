@@ -6,8 +6,17 @@ import { getPortalProfile } from "@/lib/auth";
 import { can, scopedDepartment } from "@/lib/permissions";
 import { getSessionAttendanceRoster } from "@/lib/data/session-attendance";
 import { getSessions } from "@/lib/data/sessions";
-import { buildAttendanceReportCsv } from "@/lib/export-attendance";
+import { matchesAttendanceStatusFilter } from "@/lib/attendance";
+import {
+  buildAttendanceExportFilename,
+  buildAttendanceReportCsv,
+  buildAttendanceSummaryCsv,
+  normalizeSummaryStatusColumns,
+  type AttendanceExportMode,
+  type SummaryStatusColumn,
+} from "@/lib/export-attendance";
 import type { AttendanceReportRow, SessionWithStats } from "@/lib/attendeaseTypes";
+import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@/lib/attendeaseTypes";
 import { createClient } from "@/lib/supabase/server";
 
 export type AttendanceActionResult =
@@ -37,7 +46,7 @@ export async function updateAttendanceLog(
   input: {
     scanned_at?: string | null;
     time_out_at?: string | null;
-    attendance_status?: "Present" | "Late" | "Absent";
+    attendance_status?: AttendanceStatus;
   }
 ): Promise<AttendanceActionResult> {
   const profile = await getPortalProfile();
@@ -53,6 +62,13 @@ export async function updateAttendanceLog(
       success: false,
       error: "Cannot edit a row with no attendance log. Create a scan first.",
     };
+  }
+
+  if (
+    input.attendance_status !== undefined &&
+    !(ATTENDANCE_STATUSES as readonly string[]).includes(input.attendance_status)
+  ) {
+    return { success: false, error: "Invalid attendance status." };
   }
 
   const supabase = await createClient();
@@ -174,7 +190,10 @@ export async function voidAttendanceLog(
 }
 
 export async function exportSessionAttendanceCsv(
-  sessionId: string
+  sessionId: string,
+  statusFilter: string = "all",
+  exportMode: AttendanceExportMode = "detailed",
+  summaryColumns?: SummaryStatusColumn[]
 ): Promise<AttendanceExportResult> {
   const profile = await getPortalProfile();
   if (!profile || !can(profile, "attendance.export")) {
@@ -188,10 +207,14 @@ export async function exportSessionAttendanceCsv(
     return { success: false, error: "Session ID is required." };
   }
 
+  const mode: AttendanceExportMode =
+    exportMode === "summary" ? "summary" : "detailed";
+  const columns = normalizeSummaryStatusColumns(summaryColumns);
+
   const supabase = await createClient();
   const { data: session } = await supabase
     .from("attendance_sessions")
-    .select("id, title, date, department")
+    .select("id, title, date, department, main_sessions(name)")
     .eq("id", sessionId)
     .maybeSingle();
 
@@ -208,7 +231,12 @@ export async function exportSessionAttendanceCsv(
   }
 
   const rows = await getSessionAttendanceRoster(sessionId);
-  const reportRows: AttendanceReportRow[] = rows.map((row) => ({
+  const filteredRows =
+    statusFilter && statusFilter !== "all"
+      ? rows.filter((row) => matchesAttendanceStatusFilter(row, statusFilter))
+      : rows;
+
+  const reportRows: AttendanceReportRow[] = filteredRows.map((row) => ({
     id: row.id,
     session_id: sessionId,
     student_number: row.student_number,
@@ -219,20 +247,176 @@ export async function exportSessionAttendanceCsv(
     year_level: row.year_level,
     time_in: row.time_in,
     time_out: row.time_out,
+    scan_by: row.scan_by,
     attendance_status: row.attendance_status,
   }));
+
+  const mainJoined = session.main_sessions as
+    | { name: string }
+    | { name: string }[]
+    | null
+    | undefined;
+  const mainSessionName = Array.isArray(mainJoined)
+    ? (mainJoined[0]?.name ?? null)
+    : (mainJoined?.name ?? null);
 
   await writeAuditLog(profile, {
     action: "attendance.export",
     targetType: "attendance_session",
     targetId: sessionId,
     department: session.department,
-    metadata: { count: reportRows.length },
+    metadata: {
+      count: reportRows.length,
+      statusFilter,
+      exportMode: mode,
+      summaryColumns: mode === "summary" ? columns : undefined,
+    },
   });
+
+  const csv =
+    mode === "summary"
+      ? buildAttendanceSummaryCsv(reportRows, {
+          includeTotalSessions: false,
+          summaryColumns: columns,
+        })
+      : buildAttendanceReportCsv(reportRows);
 
   return {
     success: true,
-    csv: buildAttendanceReportCsv(reportRows),
-    filename: `attendance-${session.date}-${session.title.replace(/\s+/g, "-").toLowerCase()}.csv`,
+    csv,
+    filename: buildAttendanceExportFilename({
+      mainSessionName,
+      sessionTitle: session.title,
+      date: session.date,
+      statusFilter,
+      exportMode: mode,
+    }),
+  };
+}
+
+export async function exportMainSessionAttendanceCsv(
+  mainSessionId: string,
+  exportMode: AttendanceExportMode = "detailed",
+  summaryColumns?: SummaryStatusColumn[]
+): Promise<AttendanceExportResult> {
+  const profile = await getPortalProfile();
+  if (!profile || !can(profile, "attendance.export")) {
+    return {
+      success: false,
+      error: "You don't have permission to export attendance.",
+    };
+  }
+
+  if (!mainSessionId) {
+    return { success: false, error: "Main session ID is required." };
+  }
+
+  const mode: AttendanceExportMode =
+    exportMode === "summary" ? "summary" : "detailed";
+  const columns = normalizeSummaryStatusColumns(summaryColumns);
+
+  const supabase = await createClient();
+  const { data: main } = await supabase
+    .from("main_sessions")
+    .select("id, name, department")
+    .eq("id", mainSessionId)
+    .maybeSingle();
+
+  if (!main) {
+    return { success: false, error: "Main session not found." };
+  }
+
+  const scope = scopedDepartment(profile);
+  if (scope && main.department !== scope) {
+    return {
+      success: false,
+      error: "You can only export attendance for your department.",
+    };
+  }
+
+  const { data: subSessions, error: subError } = await supabase
+    .from("attendance_sessions")
+    .select("id, title, date, department")
+    .eq("main_session_id", mainSessionId)
+    .in("status", ["Open", "Closed", "Archived"])
+    .order("date", { ascending: true })
+    .order("start_time", { ascending: true });
+
+  if (subError) {
+    return {
+      success: false,
+      error: subError.message ?? "Failed to load sub-sessions.",
+    };
+  }
+
+  if (!subSessions?.length) {
+    return {
+      success: false,
+      error: "This main session has no sub-sessions to export.",
+    };
+  }
+
+  const reportRows: AttendanceReportRow[] = [];
+  for (const session of subSessions) {
+    if (scope && session.department !== scope) continue;
+    const roster = await getSessionAttendanceRoster(session.id);
+    for (const row of roster) {
+      reportRows.push({
+        id: `${session.id}-${row.student_id}`,
+        session_id: session.id,
+        student_number: row.student_number,
+        student_name: row.student_name,
+        department: row.department ?? session.department,
+        date: session.date,
+        session_title: session.title,
+        year_level: row.year_level,
+        time_in: row.time_in,
+        time_out: row.time_out,
+        scan_by: row.scan_by,
+        attendance_status: row.attendance_status,
+      });
+    }
+  }
+
+  const dates = subSessions.map((session) => session.date).filter(Boolean);
+  const dateLabel =
+    dates.length === 0
+      ? "undated"
+      : dates[0] === dates[dates.length - 1]
+        ? dates[0]
+        : `${dates[0]}_to_${dates[dates.length - 1]}`;
+
+  await writeAuditLog(profile, {
+    action: "attendance.export",
+    targetType: "main_session",
+    targetId: mainSessionId,
+    department: main.department,
+    metadata: {
+      count: reportRows.length,
+      subSessionCount: subSessions.length,
+      exportMode: mode,
+      summaryColumns: mode === "summary" ? columns : undefined,
+    },
+  });
+
+  const includeTotalSessions = subSessions.length > 1;
+  const csv =
+    mode === "summary"
+      ? buildAttendanceSummaryCsv(reportRows, {
+          includeTotalSessions,
+          summaryColumns: columns,
+        })
+      : buildAttendanceReportCsv(reportRows);
+
+  return {
+    success: true,
+    csv,
+    filename: buildAttendanceExportFilename({
+      mainSessionName: main.name,
+      sessionTitle: "all-sub-sessions",
+      date: dateLabel,
+      statusFilter: "all",
+      exportMode: mode,
+    }),
   };
 }

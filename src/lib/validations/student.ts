@@ -27,9 +27,10 @@ export function parseStudentForm(formData: FormData): StudentFormInput {
 }
 
 export function validateStudentForm(
-  input: StudentFormInput
+  input: StudentFormInput,
+  options: { requireStudentNumber?: boolean } = {}
 ): StudentActionResult | null {
-  if (!input.student_number) {
+  if (options.requireStudentNumber && !input.student_number) {
     return { success: false, error: "Student number is required." };
   }
   if (!input.full_name) {

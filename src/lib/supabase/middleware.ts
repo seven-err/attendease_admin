@@ -1,6 +1,24 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+const PORTAL_ROLES = new Set(["admin", "department_admin"]);
+
+const PROTECTED_PREFIXES = [
+  "/dashboard",
+  "/students",
+  "/sessions",
+  "/checkers",
+  "/reports",
+  "/settings",
+  "/departments",
+  "/users",
+  "/attendance",
+  "/qr",
+  "/import",
+  "/audit",
+  "/profile",
+];
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
@@ -26,47 +44,54 @@ export async function updateSession(request: NextRequest) {
   );
 
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const user = session?.user;
+  const pathname = request.nextUrl.pathname;
 
   const isAuthPage =
-    request.nextUrl.pathname === "/login" ||
-    request.nextUrl.pathname.startsWith("/forgot-password") ||
-    request.nextUrl.pathname.startsWith("/reset-password");
+    pathname === "/login" ||
+    pathname.startsWith("/forgot-password") ||
+    pathname.startsWith("/reset-password");
 
-  const protectedPrefixes = [
-    "/dashboard",
-    "/students",
-    "/sessions",
-    "/checkers",
-    "/reports",
-    "/settings",
-    "/departments",
-    "/users",
-    "/attendance",
-    "/qr",
-    "/import",
-    "/audit",
-    "/profile",
-  ];
-
-  const isProtected = protectedPrefixes.some((prefix) =>
-    request.nextUrl.pathname.startsWith(prefix)
+  const isProtected = PROTECTED_PREFIXES.some((prefix) =>
+    pathname.startsWith(prefix)
   );
 
   if (!user && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", request.nextUrl.pathname);
+    url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  if (user && isAuthPage) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
-    return NextResponse.redirect(url);
+  if (user && (isProtected || isAuthPage)) {
+    const { data: profile } = await supabase
+      .from("users")
+      .select("role, status, department")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const isPortalUser =
+      Boolean(profile) &&
+      PORTAL_ROLES.has(profile!.role) &&
+      profile!.status === "active" &&
+      (profile!.role !== "department_admin" ||
+        Boolean(profile!.department?.trim()));
+
+    if (isProtected && !isPortalUser) {
+      await supabase.auth.signOut();
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      url.searchParams.set("error", "portal_access_denied");
+      return NextResponse.redirect(url);
+    }
+
+    if (isAuthPage && isPortalUser) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/dashboard";
+      return NextResponse.redirect(url);
+    }
   }
 
   return supabaseResponse;

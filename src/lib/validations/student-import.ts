@@ -122,7 +122,6 @@ export function parseStudentImportCsv(text: string): StudentImportPreview {
   const mapping = mapHeaders(headerRow);
 
   const requiredFields: (keyof Omit<StudentFormInput, "academic_year" | "student_status">)[] = [
-    "student_number",
     "full_name",
     "department",
     "course",
@@ -168,10 +167,6 @@ export function parseStudentImportCsv(text: string): StudentImportPreview {
       return;
     }
 
-    if (!row.student_number) {
-      errors.push({ row: rowNumber, message: "Student number is required." });
-      return;
-    }
     if (!row.full_name) {
       errors.push({ row: rowNumber, message: "Full name is required." });
       return;
@@ -213,8 +208,8 @@ export function parseStudentImportCsv(text: string): StudentImportPreview {
 
 export function studentImportCsvTemplate(): string {
   return [
-    "student_number,full_name,department,course,year_level,student_status",
-    "2026-0001,Juan Dela Cruz,CCS,BSIT,1st Year,Active",
-    "2026-0002,Maria Santos,CCJE,BS Criminology,2nd Year,Active",
+    "full_name,department,course,year_level,student_status",
+    "Juan Dela Cruz,CCS,BSIT,1st Year,Active",
+    "Maria Santos,CCJE,BS Criminology,2nd Year,Active",
   ].join("\n");
 }

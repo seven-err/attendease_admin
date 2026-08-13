@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-type BadgeVariant = "dept" | "status-open" | "status-active" | "status-closed" | "status-draft" | "status-present" | "status-late" | "status-absent" | "active" | "inactive";
+type BadgeVariant = "dept" | "status-open" | "status-active" | "status-closed" | "status-draft" | "status-present" | "status-late" | "status-late-excused" | "status-absent" | "active" | "inactive";
 
 const variants: Record<BadgeVariant, string> = {
   dept: "bg-maroon-light text-maroon",
@@ -10,6 +10,7 @@ const variants: Record<BadgeVariant, string> = {
   "status-draft": "border border-border text-text-muted bg-transparent",
   "status-present": "border border-green-600 text-green-600 bg-transparent",
   "status-late": "border border-red-300 text-red-500 bg-transparent",
+  "status-late-excused": "border border-amber-400 text-amber-700 bg-transparent",
   "status-absent": "bg-maroon text-white",
   active: "bg-maroon text-white",
   inactive: "border border-maroon text-maroon bg-transparent",

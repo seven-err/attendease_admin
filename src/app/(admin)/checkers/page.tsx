@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getPortalProfile } from "@/lib/auth";
-import { can, isSuperAdmin } from "@/lib/permissions";
+import { can, isSuperAdmin, scopedDepartment } from "@/lib/permissions";
 import {
   getCheckersPaginated,
   type CheckersQueryParams,
@@ -36,7 +36,8 @@ export default async function CheckersPage({ searchParams }: CheckersPageProps) 
   }
 
   const params = await searchParams;
-  const department =
+  const scope = scopedDepartment(profile);
+  const requestedDept =
     typeof params.dept === "string"
       ? params.dept
       : Array.isArray(params.dept)
@@ -47,7 +48,7 @@ export default async function CheckersPage({ searchParams }: CheckersPageProps) 
     page: parsePageParam(params.page),
     pageSize: parsePageSizeParam(params.pageSize),
     search: parseSearchParam(params.q),
-    department: department || "all",
+    department: scope ?? (requestedDept || "all"),
   };
 
   const result = await getCheckersPaginated(query);
@@ -63,6 +64,9 @@ export default async function CheckersPage({ searchParams }: CheckersPageProps) 
         search={query.search ?? ""}
         department={query.department ?? "all"}
         isSuperAdmin={isSuperAdmin(profile)}
+        canManage={can(profile, "checkers.manage")}
+        canPinManage={can(profile, "checkers.pin_manage")}
+        scopedDepartment={scope}
       />
     </Suspense>
   );

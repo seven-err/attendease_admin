@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getPortalProfile } from "@/lib/auth";
-import { can } from "@/lib/permissions";
+import { can, scopedDepartment } from "@/lib/permissions";
 import {
   buildReportsQueryParams,
   getReportsPageData,
@@ -35,8 +35,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     redirect("/dashboard");
   }
 
+  const scope = scopedDepartment(profile);
   const params = await searchParams;
-  const query = buildReportsQueryParams(params);
+  const query = {
+    ...buildReportsQueryParams(params),
+    ...(scope ? { department: scope } : {}),
+  };
   const data = await getReportsPageData(query);
 
   return (
@@ -51,6 +55,8 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
         sessions={data.sessions}
         recordCountBySession={data.recordCountBySession}
         query={query}
+        canExport={can(profile, "reports.export")}
+        scopedDepartment={scope}
       />
     </Suspense>
   );

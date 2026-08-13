@@ -1,4 +1,4 @@
-import { CheckerRow } from "@/lib/attendeaseTypes";
+import { CheckerProfileRow, CheckerRow } from "@/lib/attendeaseTypes";
 import { CHECKER_ROLE, DEPARTMENTS, EMPLOYEE_LABEL } from "@/lib/constants";
 import {
   buildPaginatedResult,
@@ -6,6 +6,7 @@ import {
   type PaginatedResult,
 } from "@/lib/pagination";
 import { createClient } from "@/lib/supabase/server";
+import { PIN_UNDO_WINDOW_MS } from "@/lib/checker-pin";
 
 type CheckerDbRow = {
   id: string;
@@ -17,6 +18,18 @@ type CheckerDbRow = {
   checker_scope?: string | null;
 };
 
+type CheckerProfileDbRow = {
+  id: string;
+  account_id: string;
+  display_name: string;
+  profile_role: string;
+  status: string;
+  setup_completed_at: string | null;
+  previous_pin_hash: string | null;
+  previous_pin_salt: string | null;
+  pin_reset_at: string | null;
+};
+
 function mapCheckerScope(
   scope: string | null | undefined
 ): CheckerRow["checker_scope"] {
@@ -25,7 +38,32 @@ function mapCheckerScope(
   return "department";
 }
 
-function mapCheckerRow(row: CheckerDbRow): CheckerRow {
+function mapProfileRole(
+  role: string | null | undefined
+): CheckerProfileRow["profile_role"] {
+  return role === "moderator" ? "moderator" : "checker";
+}
+
+function mapProfileStatus(
+  status: string | null | undefined
+): CheckerProfileRow["status"] {
+  return status === "inactive" ? "inactive" : "active";
+}
+
+function sortProfiles(a: CheckerProfileRow, b: CheckerProfileRow): number {
+  if (a.profile_role !== b.profile_role) {
+    return a.profile_role === "moderator" ? -1 : 1;
+  }
+  return a.display_name.localeCompare(b.display_name, undefined, {
+    sensitivity: "base",
+  });
+}
+
+function mapCheckerRow(
+  row: CheckerDbRow,
+  canRestorePreviousPin = false,
+  profiles: CheckerProfileRow[] = []
+): CheckerRow {
   return {
     id: row.id,
     full_name: row.full_name,
@@ -33,7 +71,76 @@ function mapCheckerRow(row: CheckerDbRow): CheckerRow {
     department: row.department ?? null,
     checker_scope: mapCheckerScope(row.checker_scope),
     status: row.status,
+    canRestorePreviousPin,
+    profiles,
   };
+}
+
+/**
+ * Load every checker_profiles row for the given accounts.
+ * Does not filter by profile_role — moderator and checker are both included.
+ * RLS still scopes department admins to their department accounts.
+ */
+async function profilesByAccountId(
+  accountIds: string[]
+): Promise<Map<string, CheckerProfileRow[]>> {
+  const map = new Map<string, CheckerProfileRow[]>();
+  if (!accountIds.length) return map;
+
+  const supabase = await createClient();
+  const cutoffIso = new Date(Date.now() - PIN_UNDO_WINDOW_MS).toISOString();
+  const { data, error } = await supabase
+    .from("checker_profiles")
+    .select(
+      "id, account_id, display_name, profile_role, status, setup_completed_at, previous_pin_hash, previous_pin_salt, pin_reset_at"
+    )
+    .in("account_id", accountIds);
+
+  if (error || !data) return map;
+
+  for (const row of data as CheckerProfileDbRow[]) {
+    const canRestorePreviousPin =
+      Boolean(row.previous_pin_hash && row.previous_pin_salt) &&
+      Boolean(row.pin_reset_at) &&
+      row.pin_reset_at! >= cutoffIso;
+    const profile: CheckerProfileRow = {
+      id: row.id,
+      display_name: row.display_name,
+      profile_role: mapProfileRole(row.profile_role),
+      status: mapProfileStatus(row.status),
+      setup_completed: Boolean(row.setup_completed_at),
+      canRestorePreviousPin,
+    };
+    const list = map.get(row.account_id) ?? [];
+    list.push(profile);
+    map.set(row.account_id, list);
+  }
+
+  for (const [accountId, list] of map) {
+    map.set(accountId, [...list].sort(sortProfiles));
+  }
+
+  return map;
+}
+
+async function restorablePinAccountIds(
+  accountIds: string[]
+): Promise<Set<string>> {
+  if (!accountIds.length) return new Set();
+
+  const supabase = await createClient();
+  const cutoffIso = new Date(Date.now() - PIN_UNDO_WINDOW_MS).toISOString();
+  const { data, error } = await supabase
+    .from("checker_profiles")
+    .select("account_id")
+    .in("account_id", accountIds)
+    .not("previous_pin_hash", "is", null)
+    .not("previous_pin_salt", "is", null)
+    .gte("pin_reset_at", cutoffIso);
+
+  if (error || !data) return new Set();
+
+  return new Set(data.map((row) => row.account_id).filter(Boolean));
 }
 
 const CHECKER_SELECT =
@@ -65,9 +172,8 @@ export async function getCheckersPaginated(
   } else if (department === "employee" || department === EMPLOYEE_LABEL) {
     query = query.eq("checker_scope", "employee");
   } else if (department !== "all") {
-    query = query.or(
-      `department.eq.${department},checker_scope.eq.ssg,checker_scope.eq.employee`
-    );
+    // Department filter is exact — campus-wide SSG/Employee checkers use their own filters.
+    query = query.eq("department", department).eq("checker_scope", "department");
   }
 
   if (search) {
@@ -110,7 +216,15 @@ export async function getCheckersPaginated(
   }
 
   const total = count ?? 0;
-  const items = (data as CheckerDbRow[]).map(mapCheckerRow);
+  const dbRows = data as CheckerDbRow[];
+  const accountIds = dbRows.map((row) => row.id);
+  const [restorable, profilesMap] = await Promise.all([
+    restorablePinAccountIds(accountIds),
+    profilesByAccountId(accountIds),
+  ]);
+  const items = dbRows.map((row) =>
+    mapCheckerRow(row, restorable.has(row.id), profilesMap.get(row.id) ?? [])
+  );
   const safeResult = buildPaginatedResult(items, total, page, pageSize);
 
   if (safeResult.page !== page && total > 0) {
@@ -141,19 +255,32 @@ export async function getCheckers(): Promise<CheckerRow[]> {
       .select("id, full_name, email, role, status")
       .eq("role", CHECKER_ROLE)
       .order("full_name", { ascending: true });
-    return (fallback.data ?? []).map((row) => ({
-      id: row.id,
-      full_name: row.full_name,
-      email: row.email,
-      department: null,
-      checker_scope: "department" as const,
-      status: row.status,
-    }));
+    const fallbackRows = (fallback.data ?? []) as CheckerDbRow[];
+    const accountIds = fallbackRows.map((row) => row.id);
+    const [restorable, profilesMap] = await Promise.all([
+      restorablePinAccountIds(accountIds),
+      profilesByAccountId(accountIds),
+    ]);
+    return fallbackRows.map((row) =>
+      mapCheckerRow(
+        { ...row, department: null, checker_scope: "department" },
+        restorable.has(row.id),
+        profilesMap.get(row.id) ?? []
+      )
+    );
   }
 
   if (error || !data) return [];
 
-  return (data as CheckerDbRow[]).map(mapCheckerRow);
+  const dbRows = data as CheckerDbRow[];
+  const accountIds = dbRows.map((row) => row.id);
+  const [restorable, profilesMap] = await Promise.all([
+    restorablePinAccountIds(accountIds),
+    profilesByAccountId(accountIds),
+  ]);
+  return dbRows.map((row) =>
+    mapCheckerRow(row, restorable.has(row.id), profilesMap.get(row.id) ?? [])
+  );
 }
 
 export type SessionCheckerOption = {
@@ -162,17 +289,26 @@ export type SessionCheckerOption = {
   department: string | null;
 };
 
-export async function getActiveCheckersForSessions(): Promise<
-  SessionCheckerOption[]
-> {
+export async function getActiveCheckersForSessions(
+  department?: string | null
+): Promise<SessionCheckerOption[]> {
   const supabase = await createClient();
+  const scoped = department?.trim() || null;
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("users")
     .select("id, full_name, department")
     .eq("role", CHECKER_ROLE)
     .eq("status", "active")
     .order("full_name", { ascending: true });
+
+  // Department admins only assign checkers from their own department
+  // (not campus-wide SSG / Employee accounts).
+  if (scoped) {
+    query = query.eq("department", scoped).eq("checker_scope", "department");
+  }
+
+  const { data, error } = await query;
 
   if (error || !data) return [];
 

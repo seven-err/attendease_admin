@@ -9,6 +9,10 @@ import { Modal } from "@/components/ui/Modal";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SessionAttendancePanel } from "@/components/attendance/SessionAttendancePanel";
 import {
+  ExportModeModal,
+  type ExportModeSelection,
+} from "@/components/reports/ExportModeModal";
+import {
   MainSession,
   SESSION_STATUSES,
   SessionWithStats,
@@ -16,23 +20,32 @@ import {
 import { DEPARTMENTS } from "@/lib/constants";
 import { SessionCheckerOption } from "@/lib/data/checkers";
 import { organizeSessions } from "@/lib/data/session-organization";
-import { useAttendanceRealtime, usePollingFallback } from "@/lib/hooks/useAttendanceRealtime";
+import { downloadCsv } from "@/lib/export-attendance";
+import {
+  FALLBACK_POLL_MS,
+  useAttendanceRealtime,
+  usePollingFallback,
+} from "@/lib/hooks/useAttendanceRealtime";
 import {
   displaySessionStatus,
   formatDate,
   formatTimeRange,
   sessionStatusVariant,
 } from "@/lib/format";
+import { exportMainSessionAttendanceCsv } from "@/app/(admin)/attendance/actions";
 import {
   archiveMainSession,
   archiveSession,
   closeSession,
   createMainSession,
   createSession,
+  deleteMainSession,
+  deleteSession,
   openSession,
   updateMainSession,
   updateSession,
 } from "./actions";
+import { SESSION_DELETE_CONFIRMATION } from "@/lib/validations/session";
 import { MainSessionForm } from "./MainSessionForm";
 import { SessionForm } from "./SessionForm";
 import {
@@ -40,6 +53,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Download,
   FolderTree,
   Info,
   Layers,
@@ -54,7 +68,23 @@ type SessionsGridProps = {
   sessions: SessionWithStats[];
   mainSessions: MainSession[];
   checkers: SessionCheckerOption[];
+  canExport?: boolean;
+  canDelete?: boolean;
+  scopedDepartment?: string | null;
 };
+
+type PendingDelete =
+  | {
+      kind: "session";
+      id: string;
+      name: string;
+      isSubSession: boolean;
+    }
+  | {
+      kind: "main";
+      id: string;
+      name: string;
+    };
 
 type SessionModalMode = "add" | "edit" | null;
 type MainModalMode = "add" | "edit" | null;
@@ -79,6 +109,23 @@ function OrganizationBadge({
   );
 }
 
+function SessionCardStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="min-w-0 rounded border border-border-subtle bg-white/60 px-2 py-1.5">
+      <p className="truncate text-[11px] font-bold uppercase tracking-wide text-text-muted">
+        {label}
+      </p>
+      <p className="truncate text-sm font-bold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
 function SessionCard({
   session,
   nested = false,
@@ -96,17 +143,21 @@ function SessionCard({
   onOpen: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
 }) {
+  const attendees =
+    session.present_count + session.late_count + session.late_excused_count;
+  const lateTotal = session.late_count + session.late_excused_count;
+
   return (
     <div
       className={
         nested
-          ? "overflow-hidden rounded-lg border border-border-subtle bg-surface-raised"
-          : "overflow-hidden rounded-[10px] border border-border bg-white"
+          ? "flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-border-subtle bg-surface-raised"
+          : "flex h-full min-w-0 flex-col overflow-hidden rounded-[10px] border border-border bg-white"
       }
     >
-      <div className="p-4">
+      <div className="flex min-w-0 flex-1 flex-col p-4">
         <div className="mb-3 flex items-start justify-between gap-2">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex min-w-0 flex-wrap gap-2">
             <OrganizationBadge
               label={session.main_session_id ? "Sub-session" : "Standalone"}
             />
@@ -120,103 +171,104 @@ function SessionCard({
           <button
             type="button"
             onClick={() => onEdit(session)}
-            className="rounded p-1 text-text-muted hover:bg-gray-100"
+            className="shrink-0 rounded p-1 text-text-muted hover:bg-gray-100"
             aria-label={`Edit ${session.title}`}
           >
             <Pencil className="size-4" />
           </button>
         </div>
-        <h3 className="mb-1 text-lg font-bold">{session.title}</h3>
+        <h3 className="mb-1 break-words text-lg font-bold">{session.title}</h3>
         {session.main_session_name && (
-          <p className="mb-3 text-xs text-text-muted">
+          <p className="mb-3 break-words text-xs text-text-muted">
             Under {session.main_session_name}
           </p>
         )}
         <div className="space-y-2 text-sm text-text-secondary">
-          <p className="flex items-center gap-2">
-            <Calendar className="size-4" />
-            {formatDate(session.date)}
+          <p className="flex min-w-0 items-center gap-2">
+            <Calendar className="size-4 shrink-0" />
+            <span className="min-w-0 break-words">
+              {formatDate(session.date)}
+            </span>
           </p>
-          <p className="flex items-center gap-2">
-            <Clock className="size-4" />
-            {formatTimeRange(session.start_time, session.end_time)}
+          <p className="flex min-w-0 items-center gap-2">
+            <Clock className="size-4 shrink-0" />
+            <span className="min-w-0 break-words">
+              {formatTimeRange(session.start_time, session.end_time)}
+            </span>
           </p>
-          <p className="flex items-center gap-2">
-            <User className="size-4" />
-            {session.checker_name ?? "Unassigned"}
+          <p className="flex min-w-0 items-center gap-2">
+            <User className="size-4 shrink-0" />
+            <span className="min-w-0 break-words">
+              {session.checker_name ?? "Unassigned"}
+            </span>
           </p>
         </div>
-        {session.status === "Closed" && (
-          <div className="mt-3 flex gap-4 border-t border-border pt-3 text-sm">
-            <span>
-              <strong>{session.present_count}</strong> Present
-            </span>
-            <span className="border-l border-border pl-4">
-              <strong>{session.absent_count}</strong> Absent
-            </span>
-          </div>
-        )}
-        {session.status === "Open" && (
-          <p className="mt-3 text-sm font-bold text-green-600">
-            {session.on_time_count} On Time
-          </p>
-        )}
-        {session.status === "Draft" && (
-          <p className="mt-3 flex items-center gap-1 text-xs text-text-muted">
-            <Info className="size-3.5" />
-            Assign a checker before opening.
-          </p>
-        )}
+        <div className="mt-auto pt-3">
+          {(session.status === "Open" ||
+            session.status === "Closed" ||
+            session.status === "Archived") && (
+            <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
+              <SessionCardStat label="Attendees" value={attendees} />
+              <SessionCardStat label="Present" value={session.present_count} />
+              <SessionCardStat label="Late" value={lateTotal} />
+              <SessionCardStat label="Absent" value={session.absent_count} />
+            </div>
+          )}
+          {session.status === "Draft" && (
+            <p className="flex items-start gap-1 text-xs text-text-muted">
+              <Info className="mt-0.5 size-3.5 shrink-0" />
+              <span>Assign a checker before opening.</span>
+            </p>
+          )}
+        </div>
       </div>
-      <div className="flex gap-2 bg-maroon-light px-4 py-3">
+      <div className="grid min-h-[3.25rem] grid-cols-1 gap-2 border-t border-border bg-surface-raised px-3 py-3 min-[360px]:grid-cols-2 min-[360px]:px-4">
         {session.status === "Draft" && (
           <>
-            <button
-              type="button"
+            <Button
+              variant="outline-brand"
               onClick={() => onEdit(session)}
-              className="flex-1 rounded border border-maroon py-2 text-sm font-bold text-maroon"
+              className="min-w-0 w-full"
             >
               Edit
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               disabled={isPending}
               onClick={() => onOpen(session.id)}
-              className="flex-1 rounded border border-maroon py-2 text-sm font-bold text-maroon disabled:opacity-60"
+              className="min-w-0 w-full"
             >
               Open
-            </button>
+            </Button>
           </>
         )}
         {session.status === "Open" && (
           <>
-            <button
-              type="button"
+            <Button
+              variant="outline-brand"
               onClick={() => onView(session)}
-              className="flex flex-1 items-center justify-center gap-2 rounded border border-maroon py-2 text-sm font-bold text-maroon"
+              className="min-w-0 w-full"
             >
-              <Eye className="size-4" />
-              View Details
-            </button>
-            <button
-              type="button"
+              <Eye className="size-4 shrink-0" />
+              <span className="truncate">View Details</span>
+            </Button>
+            <Button
               disabled={isPending}
               onClick={() => onClose(session.id)}
-              className="flex-1 rounded border border-maroon py-2 text-sm font-bold text-maroon disabled:opacity-60"
+              className="min-w-0 w-full"
             >
-              Close Session
-            </button>
+              <span className="truncate">Close Session</span>
+            </Button>
           </>
         )}
         {(session.status === "Closed" || session.status === "Archived") && (
-          <button
-            type="button"
+          <Button
+            variant="outline-brand"
             onClick={() => onView(session)}
-            className="flex flex-1 items-center justify-center gap-2 rounded border border-maroon py-2 text-sm font-bold text-maroon"
+            className="min-w-0 w-full min-[360px]:col-span-2"
           >
-            <Eye className="size-4" />
-            View Details
-          </button>
+            <Eye className="size-4 shrink-0" />
+            <span className="truncate">View Details</span>
+          </Button>
         )}
       </div>
     </div>
@@ -227,17 +279,25 @@ export function SessionsGrid({
   sessions,
   mainSessions,
   checkers,
+  canExport = false,
+  canDelete = false,
+  scopedDepartment = null,
 }: SessionsGridProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [departmentFilter, setDepartmentFilter] = useState("all");
+  const [departmentFilter, setDepartmentFilter] = useState(
+    scopedDepartment ?? "all"
+  );
+  const deptOptions = scopedDepartment
+    ? [scopedDepartment]
+    : [...DEPARTMENTS];
   const [organizationFilter, setOrganizationFilter] =
     useState<OrganizationFilter>("all");
   const [expandedMains, setExpandedMains] = useState<Set<string>>(
-    () => new Set(mainSessions.map((main) => main.id))
+    () => new Set()
   );
 
   const [sessionModalMode, setSessionModalMode] =
@@ -247,6 +307,11 @@ export function SessionsGrid({
   const [selectedSession, setSelectedSession] =
     useState<SessionWithStats | null>(null);
   const [selectedMain, setSelectedMain] = useState<MainSession | null>(null);
+  const [exportMain, setExportMain] = useState<MainSession | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(
+    null
+  );
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [defaultMainSessionId, setDefaultMainSessionId] = useState<
     string | null
   >(null);
@@ -257,8 +322,8 @@ export function SessionsGrid({
     router.refresh();
   }, [router]);
 
-  useAttendanceRealtime(refreshSessions);
-  usePollingFallback(refreshSessions, true, 5000);
+  const { realtimeReady } = useAttendanceRealtime(refreshSessions);
+  usePollingFallback(refreshSessions, realtimeReady === false, FALLBACK_POLL_MS);
 
   const organized = useMemo(
     () => organizeSessions(sessions, mainSessions),
@@ -486,12 +551,107 @@ export function SessionsGrid({
     });
   }
 
+  function openDeleteSession(session: SessionWithStats) {
+    setError(null);
+    setDeleteConfirmation("");
+    setPendingDelete({
+      kind: "session",
+      id: session.id,
+      name: session.title,
+      isSubSession: Boolean(session.main_session_id),
+    });
+  }
+
+  function openDeleteMain(main: MainSession) {
+    setError(null);
+    setDeleteConfirmation("");
+    setPendingDelete({
+      kind: "main",
+      id: main.id,
+      name: main.name,
+    });
+  }
+
+  function closeDeleteModal() {
+    if (isPending) return;
+    setPendingDelete(null);
+    setDeleteConfirmation("");
+    setError(null);
+  }
+
+  function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    setError(null);
+    startTransition(async () => {
+      const result =
+        pendingDelete.kind === "session"
+          ? await deleteSession(pendingDelete.id, deleteConfirmation)
+          : await deleteMainSession(pendingDelete.id, deleteConfirmation);
+
+      if (!result.success) {
+        setError(result.error);
+        return;
+      }
+
+      setPendingDelete(null);
+      setDeleteConfirmation("");
+      if (pendingDelete.kind === "session") {
+        closeSessionModal();
+        setViewSession((current) =>
+          current?.id === pendingDelete.id ? null : current
+        );
+        setSuccess(
+          pendingDelete.isSubSession
+            ? "Sub-session deleted permanently."
+            : "Session deleted permanently."
+        );
+      } else {
+        closeMainModal();
+        setSuccess(
+          "Main session deleted. Sub-sessions were left unchanged and now appear as standalone."
+        );
+      }
+      router.refresh();
+    });
+  }
+
+  const deletePhraseMatches =
+    deleteConfirmation.trim() === SESSION_DELETE_CONFIRMATION;
+
+  async function handleExportMain({
+    mode,
+    summaryColumns,
+  }: ExportModeSelection): Promise<boolean> {
+    if (!exportMain) return false;
+    setError(null);
+    const result = await exportMainSessionAttendanceCsv(
+      exportMain.id,
+      mode,
+      summaryColumns
+    );
+    if (!result.success) {
+      setError(result.error);
+      return false;
+    }
+    downloadCsv(result.filename, result.csv);
+    setSuccess(
+      mode === "summary"
+        ? `Summary exported for ${exportMain.name}.`
+        : `Attendance exported for ${exportMain.name}.`
+    );
+    return true;
+  }
+
   const sessionFormId = "session-form";
   const mainFormId = "main-session-form";
   const isEditSession = sessionModalMode === "edit";
   const isEditMain = mainModalMode === "edit";
   const hasResults =
     filtered.mainGroups.length > 0 || filtered.standalones.length > 0;
+  const exportSubCount = exportMain
+    ? (organized.mainGroups.find((group) => group.main.id === exportMain.id)
+        ?.subs.length ?? 0)
+    : 0;
 
   return (
     <>
@@ -499,41 +659,45 @@ export function SessionsGrid({
         <Alert
           variant="success"
           onDismiss={() => setSuccess(null)}
-          className="mx-auto mb-4 max-w-7xl"
+          className="mx-auto mb-4 min-w-0 max-w-7xl"
         >
           {success}
         </Alert>
       )}
-      {!sessionModalMode && !mainModalMode && error && (
+      {!sessionModalMode && !mainModalMode && !pendingDelete && error && (
         <Alert
           variant="error"
           onDismiss={() => setError(null)}
-          className="mx-auto mb-4 max-w-7xl"
+          className="mx-auto mb-4 min-w-0 max-w-7xl"
         >
           {error}
         </Alert>
       )}
 
-      <div className="mx-auto max-w-7xl space-y-4">
+      <div className="mx-auto min-w-0 max-w-7xl space-y-4">
         <PageHeader
           title="Attendance Sessions"
           description="Organize events as main sessions with sub-sessions, or as standalone sessions"
           actions={
             <>
-              <Button variant="secondary" onClick={openAddMain}>
-                <FolderTree className="size-4" />
-                Add Main Session
+              <Button
+                variant="secondary"
+                onClick={openAddMain}
+                className="min-w-0 max-sm:flex-1"
+              >
+                <FolderTree className="size-4 shrink-0" />
+                <span className="truncate">Add Main Session</span>
               </Button>
-              <Button onClick={openAddStandalone}>
-                <Plus className="size-4" />
-                Add Session
+              <Button onClick={openAddStandalone} className="min-w-0 max-sm:flex-1">
+                <Plus className="size-4 shrink-0" />
+                <span className="truncate">Add Session</span>
               </Button>
             </>
           }
         />
 
-        <div className="flex flex-wrap items-end gap-4 rounded-[10px] border border-border bg-white p-4">
-          <div className="min-w-[200px] flex-1">
+        <div className="grid gap-4 rounded-[10px] border border-border bg-white p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="min-w-0 sm:col-span-2 lg:col-span-1">
             <label className="mb-1 block text-[11px] font-bold uppercase text-text-secondary">
               Search
             </label>
@@ -549,7 +713,7 @@ export function SessionsGrid({
             </div>
           </div>
 
-          <div className="min-w-[150px]">
+          <div className="min-w-0">
             <label className="mb-1 block text-[11px] font-bold uppercase text-text-secondary">
               Organization
             </label>
@@ -566,7 +730,7 @@ export function SessionsGrid({
             </select>
           </div>
 
-          <div className="min-w-[150px]">
+          <div className="min-w-0">
             <label className="mb-1 block text-[11px] font-bold uppercase text-text-secondary">
               Status
             </label>
@@ -584,7 +748,7 @@ export function SessionsGrid({
             </select>
           </div>
 
-          <div className="min-w-[150px]">
+          <div className="min-w-0">
             <label className="mb-1 block text-[11px] font-bold uppercase text-text-secondary">
               Department
             </label>
@@ -592,9 +756,12 @@ export function SessionsGrid({
               value={departmentFilter}
               onChange={(e) => setDepartmentFilter(e.target.value)}
               className="h-10 w-full rounded border border-border px-3 text-sm"
+              disabled={Boolean(scopedDepartment)}
             >
-              <option value="all">All departments</option>
-              {DEPARTMENTS.map((dept) => (
+              {!scopedDepartment && (
+                <option value="all">All departments</option>
+              )}
+              {deptOptions.map((dept) => (
                 <option key={dept} value={dept}>
                   {dept}
                 </option>
@@ -625,7 +792,7 @@ export function SessionsGrid({
                         key={main.id}
                         className="overflow-hidden rounded-[10px] border border-border bg-white"
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-4">
+                        <div className="flex flex-col gap-3 border-b border-border px-3 py-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between sm:px-4">
                           <div className="min-w-0 flex-1">
                             <div className="mb-2 flex flex-wrap items-center gap-2">
                               <OrganizationBadge label="Main" />
@@ -644,9 +811,11 @@ export function SessionsGrid({
                                 {main.status}
                               </Badge>
                             </div>
-                            <h3 className="text-lg font-bold">{main.name}</h3>
+                            <h3 className="break-words text-lg font-bold">
+                              {main.name}
+                            </h3>
                             {main.description && (
-                              <p className="mt-1 text-sm text-text-secondary">
+                              <p className="mt-1 break-words text-sm text-text-secondary">
                                 {main.description}
                               </p>
                             )}
@@ -659,12 +828,24 @@ export function SessionsGrid({
                             </p>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
+                            {canExport && (
+                              <Button
+                                variant="secondary"
+                                onClick={() => setExportMain(main)}
+                                disabled={isPending || subs.length === 0}
+                                className="min-w-0"
+                              >
+                                <Download className="size-4 shrink-0" />
+                                Export
+                              </Button>
+                            )}
                             <Button
                               variant="secondary"
                               onClick={() => openAddSubSession(main.id)}
+                              className="min-w-0"
                             >
-                              <Plus className="size-4" />
-                              Add Sub-session
+                              <Plus className="size-4 shrink-0" />
+                              <span className="truncate">Add Sub-session</span>
                             </Button>
                             <button
                               type="button"
@@ -694,14 +875,14 @@ export function SessionsGrid({
                         </div>
 
                         {expanded && (
-                          <div className="space-y-3 bg-surface-raised/40 p-4">
+                          <div className="space-y-3 bg-surface-raised/40 p-3 sm:p-4">
                             {subs.length === 0 ? (
                               <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-text-muted">
                                 No sub-sessions yet. Add one to start taking
                                 attendance under this main session.
                               </p>
                             ) : (
-                              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                                 {subs.map((session) => (
                                   <SessionCard
                                     key={session.id}
@@ -731,7 +912,7 @@ export function SessionsGrid({
                   <Layers className="size-4" />
                   Standalone sessions
                 </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                   {filtered.standalones.map((session) => (
                     <SessionCard
                       key={session.id}
@@ -749,6 +930,24 @@ export function SessionsGrid({
           </div>
         )}
       </div>
+
+      <ExportModeModal
+        open={exportMain !== null}
+        onClose={() => !isPending && setExportMain(null)}
+        onExport={handleExportMain}
+        disabled={exportSubCount === 0}
+        title={
+          exportMain
+            ? `Export ${exportMain.name}`
+            : "Export Main Session"
+        }
+        description={
+          exportMain
+            ? `Export attendance across all ${exportSubCount} sub-session${exportSubCount === 1 ? "" : "s"} under this main session.`
+            : "Choose detailed roster rows or a per-student status summary."
+        }
+        summaryDescription="One row per student with the status counts you select, plus Total Sessions across all sub-sessions."
+      />
 
       <Modal
         open={sessionModalMode !== null}
@@ -781,6 +980,16 @@ export function SessionsGrid({
                 Archive
               </button>
             )}
+            {canDelete && isEditSession && selectedSession && (
+              <button
+                type="button"
+                onClick={() => openDeleteSession(selectedSession)}
+                disabled={isPending}
+                className="px-4 py-2 text-sm font-bold text-red-600 disabled:opacity-60"
+              >
+                Delete
+              </button>
+            )}
             <button
               type="submit"
               form={sessionFormId}
@@ -809,6 +1018,7 @@ export function SessionsGrid({
           mainSessions={mainSessions}
           defaultMainSessionId={defaultMainSessionId}
           lockOrganization={Boolean(defaultMainSessionId) && !isEditSession}
+          lockedDepartment={scopedDepartment}
           onSubmit={handleSaveSession}
         />
       </Modal>
@@ -838,6 +1048,16 @@ export function SessionsGrid({
                 Archive
               </button>
             )}
+            {canDelete && isEditMain && selectedMain && (
+              <button
+                type="button"
+                onClick={() => openDeleteMain(selectedMain)}
+                disabled={isPending}
+                className="px-4 py-2 text-sm font-bold text-red-600 disabled:opacity-60"
+              >
+                Delete
+              </button>
+            )}
             <button
               type="submit"
               form={mainFormId}
@@ -862,6 +1082,7 @@ export function SessionsGrid({
           key={selectedMain?.id ?? "new-main"}
           formId={mainFormId}
           mainSession={selectedMain}
+          lockedDepartment={scopedDepartment}
           onSubmit={handleSaveMain}
         />
       </Modal>
@@ -888,8 +1109,92 @@ export function SessionsGrid({
             sessionId={viewSession.id}
             sessionTitle={viewSession.title}
             sessionDate={viewSession.date}
+            mainSessionName={viewSession.main_session_name}
           />
         )}
+      </Modal>
+
+      <Modal
+        open={pendingDelete !== null}
+        onClose={closeDeleteModal}
+        title={
+          pendingDelete?.kind === "main"
+            ? "Delete Main Session"
+            : pendingDelete?.isSubSession
+              ? "Delete Sub-session"
+              : "Delete Session"
+        }
+        panelClassName="max-w-md"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeDeleteModal}
+              disabled={isPending}
+              className="px-4 py-2 text-sm font-bold text-foreground disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDelete}
+              disabled={isPending || !deletePhraseMatches}
+              className="rounded bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+            >
+              {isPending ? "Deleting..." : "Delete permanently"}
+            </button>
+          </>
+        }
+      >
+        {error && (
+          <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+            {error}
+          </p>
+        )}
+        <div className="space-y-4 text-sm text-text-secondary">
+          <p>
+            You are about to delete{" "}
+            <span className="font-bold text-foreground">
+              {pendingDelete?.name}
+            </span>
+            .
+          </p>
+          {pendingDelete?.kind === "session" ? (
+            <p>
+              This permanently removes the{" "}
+              {pendingDelete.isSubSession ? "sub-session" : "session"} and all of
+              its attendance records. This cannot be undone.
+            </p>
+          ) : (
+            <p>
+              This removes the main session from the list. Sub-sessions are left
+              unchanged and will appear as standalone sessions.
+            </p>
+          )}
+          <div>
+            <label
+              htmlFor="session-delete-confirmation"
+              className="mb-1 block text-[11px] font-bold uppercase text-text-secondary"
+            >
+              Type{" "}
+              <span className="normal-case tracking-normal text-foreground">
+                {SESSION_DELETE_CONFIRMATION}
+              </span>{" "}
+              to continue
+            </label>
+            <input
+              id="session-delete-confirmation"
+              type="text"
+              value={deleteConfirmation}
+              onChange={(e) => setDeleteConfirmation(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={isPending}
+              placeholder={SESSION_DELETE_CONFIRMATION}
+              className="h-10 w-full rounded border border-border px-3 text-sm outline-none focus:border-maroon"
+            />
+          </div>
+        </div>
       </Modal>
     </>
   );

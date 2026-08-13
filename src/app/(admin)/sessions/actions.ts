@@ -6,6 +6,7 @@ import { can, canAny, scopedDepartment, type PermissionKey } from "@/lib/permiss
 import { createClient } from "@/lib/supabase/server";
 import {
   parseSessionForm,
+  SESSION_DELETE_CONFIRMATION,
   SessionActionResult,
   sessionPayloadFromInput,
   validateSessionForm,
@@ -47,6 +48,54 @@ async function enforceSessionDepartment(
   if (!department || department !== scope) {
     return "You can only manage sessions for your assigned department.";
   }
+  return null;
+}
+
+async function enforceAssignedChecker(
+  checkerId: string | null | undefined,
+  sessionDepartment: string | null | undefined
+): Promise<string | null> {
+  if (!checkerId) return null;
+
+  const profile = await getPortalProfile();
+  const scope = scopedDepartment(profile);
+  const supabase = await createClient();
+  const { data: checker, error } = await supabase
+    .from("users")
+    .select("id, role, status, department, checker_scope")
+    .eq("id", checkerId)
+    .maybeSingle();
+
+  if (error || !checker) {
+    return "Assigned checker not found.";
+  }
+  if (checker.role !== "attendance_checker") {
+    return "Assigned user is not a checker.";
+  }
+  if (checker.status !== "active") {
+    return "Assigned checker must be active.";
+  }
+
+  // Department admins may only assign checkers from their own department.
+  if (scope) {
+    if (
+      checker.checker_scope !== "department" ||
+      checker.department !== scope
+    ) {
+      return "You can only assign checkers from your department.";
+    }
+  }
+
+  // When the session has a department, prefer a matching department checker.
+  if (
+    sessionDepartment &&
+    checker.checker_scope === "department" &&
+    checker.department &&
+    checker.department !== sessionDepartment
+  ) {
+    return "Assigned checker must belong to the session department.";
+  }
+
   return null;
 }
 
@@ -209,6 +258,12 @@ export async function createSession(
   const scopeError = await enforceSessionDepartment(input.department);
   if (scopeError) return { success: false, error: scopeError };
 
+  const checkerError = await enforceAssignedChecker(
+    input.assigned_checker_id || null,
+    input.department
+  );
+  if (checkerError) return { success: false, error: checkerError };
+
   if (input.main_session_id) {
     const mainError = await assertMainSessionAccessible(input.main_session_id);
     if (mainError) return mainError;
@@ -248,6 +303,12 @@ export async function updateSession(
 
   const scopeError = await enforceSessionDepartment(input.department);
   if (scopeError) return { success: false, error: scopeError };
+
+  const checkerError = await enforceAssignedChecker(
+    input.assigned_checker_id || null,
+    input.department
+  );
+  if (checkerError) return { success: false, error: checkerError };
 
   if (input.main_session_id) {
     const mainError = await assertMainSessionAccessible(input.main_session_id);
@@ -369,11 +430,122 @@ export async function archiveSession(
   return { success: true };
 }
 
+function assertDeleteConfirmation(
+  confirmation: string
+): SessionActionResult | null {
+  if (confirmation.trim() !== SESSION_DELETE_CONFIRMATION) {
+    return {
+      success: false,
+      error: `Type "${SESSION_DELETE_CONFIRMATION}" exactly to confirm.`,
+    };
+  }
+  return null;
+}
+
+export async function deleteSession(
+  sessionId: string,
+  confirmation: string
+): Promise<SessionActionResult> {
+  const authError = await requireSessionPermission("sessions.delete");
+  if (authError) return authError;
+  if (!sessionId) {
+    return { success: false, error: "Session ID is required." };
+  }
+
+  const confirmError = assertDeleteConfirmation(confirmation);
+  if (confirmError) return confirmError;
+
+  const supabase = await createClient();
+  const { data: session, error: getError } = await supabase
+    .from("attendance_sessions")
+    .select("id, department, title")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (getError || !session) {
+    return {
+      success: false,
+      error: getError?.message ?? "Session not found.",
+    };
+  }
+
+  const scopeError = await enforceSessionDepartment(session.department);
+  if (scopeError) return { success: false, error: scopeError };
+
+  const { error } = await supabase
+    .from("attendance_sessions")
+    .delete()
+    .eq("id", sessionId);
+
+  if (error) {
+    return {
+      success: false,
+      error: error.message ?? "Failed to delete session.",
+    };
+  }
+
+  revalidateSessionPaths();
+  return { success: true };
+}
+
+export async function deleteMainSession(
+  mainSessionId: string,
+  confirmation: string
+): Promise<SessionActionResult> {
+  const authError = await requireSessionPermission("sessions.delete");
+  if (authError) return authError;
+  if (!mainSessionId) {
+    return { success: false, error: "Main session ID is required." };
+  }
+
+  const confirmError = assertDeleteConfirmation(confirmation);
+  if (confirmError) return confirmError;
+
+  const supabase = await createClient();
+  const { data: main, error: getError } = await supabase
+    .from("main_sessions")
+    .select("id, department, status")
+    .eq("id", mainSessionId)
+    .maybeSingle();
+
+  if (getError || !main) {
+    return {
+      success: false,
+      error: getError?.message ?? "Main session not found.",
+    };
+  }
+
+  const scopeError = await enforceSessionDepartment(main.department);
+  if (scopeError) return { success: false, error: scopeError };
+
+  const { error } = await supabase
+    .from("main_sessions")
+    .update({ status: "Trashed" })
+    .eq("id", mainSessionId);
+
+  if (error) {
+    return {
+      success: false,
+      error: error.message ?? "Failed to delete main session.",
+    };
+  }
+
+  revalidateSessionPaths();
+  return { success: true };
+}
+
 export async function fetchSessionAttendance(
   sessionId: string
 ): Promise<SessionAttendanceResult> {
   const profile = await getPortalProfile();
-  if (!profile || !canAny(profile, ["attendance.view", "sessions.view"])) {
+  if (
+    !profile ||
+    !canAny(profile, [
+      "attendance.view",
+      "attendance.export",
+      "sessions.view",
+    ])
+  ) {
     return { success: false, error: "Unauthorized. Admin access required." };
   }
   if (!sessionId) {

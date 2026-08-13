@@ -1,12 +1,7 @@
 import { SessionWithStats } from "@/lib/attendeaseTypes";
-import {
-  onTimeCount,
-  emptyLogCounts,
-} from "@/lib/data/session-stats";
-import {
-  getCheckerNameMap,
-  getSessionLogCounts,
-} from "@/lib/data/session-helpers";
+import { emptyLogCounts } from "@/lib/data/session-stats";
+import { getScopedSessionCounts } from "@/lib/data/session-attendance";
+import { getCheckerNameMap } from "@/lib/data/session-helpers";
 import { createClient } from "@/lib/supabase/server";
 
 const DEFAULT_SESSION_LIMIT = 200;
@@ -40,21 +35,28 @@ export async function getSessions(
 
   if (error || !sessions?.length) return [];
 
+  const typedSessions = sessions as SessionRow[];
   const checkerIds = [
     ...new Set(
-      (sessions as SessionRow[])
+      typedSessions
         .map((session) => session.assigned_checker_id)
         .filter((id): id is string => Boolean(id))
     ),
   ];
-  const sessionIds = (sessions as SessionRow[]).map((session) => session.id);
 
   const [checkerMap, logCounts] = await Promise.all([
     getCheckerNameMap(supabase, checkerIds),
-    getSessionLogCounts(supabase, sessionIds),
+    getScopedSessionCounts(
+      typedSessions.map((session) => ({
+        id: session.id,
+        department: session.department,
+        course: session.course,
+        year_level: session.year_level,
+      }))
+    ),
   ]);
 
-  return (sessions as SessionRow[]).map((session) => {
+  return typedSessions.map((session) => {
     const counts = logCounts.get(session.id) ?? emptyLogCounts();
     // Drop the joined relation object from the mapped row.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -69,8 +71,8 @@ export async function getSessions(
         : null,
       present_count: counts.present,
       late_count: counts.late,
+      late_excused_count: counts.lateExcused,
       absent_count: counts.absent,
-      on_time_count: onTimeCount(counts),
     };
   });
 }

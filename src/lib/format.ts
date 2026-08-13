@@ -48,9 +48,79 @@ export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("en-US", dateTimeOptions);
 }
 
+/** Full date+time for audit / CSV; prefer formatClockTime* in attendance UI. */
 export function formatDateTimeOrDash(iso: string | null | undefined): string {
   if (!iso) return "—";
   return formatDateTime(iso);
+}
+
+/** Time-only from an ISO timestamp (attendance Time In / Time Out UI). */
+export function formatClockTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-US", timeOptions);
+}
+
+export function formatClockTimeOrDash(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return formatClockTime(iso);
+}
+
+/** Time Out column: show "No Time Out" when timed in without time out. */
+export function formatTimeOutDisplay(
+  timeIn: string | null | undefined,
+  timeOut: string | null | undefined
+): string {
+  if (timeOut) return formatClockTime(timeOut);
+  if (timeIn) return "No Time Out";
+  return "—";
+}
+
+/** Badge / column label (e.g. Late (Excused) → LATE (EXCUSED)). */
+export function displayAttendanceStatus(
+  status: ResolvedAttendanceStatus | AttendanceStatus | string
+): string {
+  return status.toUpperCase();
+}
+
+/** Label for filters, dropdowns, and summary cards. */
+export function displayAttendanceStatusLabel(
+  status: ResolvedAttendanceStatus | AttendanceStatus | string
+): string {
+  return status;
+}
+
+/** `datetime-local` value in Asia/Manila for editing stored UTC timestamps. */
+export function toManilaDateTimeLocal(
+  iso: string | null | undefined
+): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+/** Parse a Manila `datetime-local` string into a UTC ISO timestamp. */
+export function manilaDateTimeLocalToIso(
+  value: string | null | undefined
+): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const date = new Date(`${trimmed}:00+08:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 }
 
 export function truncateToken(token: string, visible = 8): string {
@@ -89,14 +159,14 @@ export function sessionStatusVariant(
 
 export function resolvedAttendanceStatusVariant(
   status: ResolvedAttendanceStatus
-): "status-present" | "status-late" | "status-absent" {
+): "status-present" | "status-late" | "status-late-excused" | "status-absent" {
   switch (status) {
     case "Present":
       return "status-present";
     case "Late":
       return "status-late";
-    case "On Time":
-      return "status-present";
+    case "Late (Excused)":
+      return "status-late-excused";
     case "Absent":
     case "Voided":
       return "status-absent";
@@ -107,12 +177,14 @@ export function resolvedAttendanceStatusVariant(
 
 export function attendanceStatusVariant(
   status: AttendanceStatus
-): "status-present" | "status-late" | "status-absent" {
+): "status-present" | "status-late" | "status-late-excused" | "status-absent" {
   switch (status) {
     case "Present":
       return "status-present";
     case "Late":
       return "status-late";
+    case "Late (Excused)":
+      return "status-late-excused";
     case "Absent":
       return "status-absent";
     default:

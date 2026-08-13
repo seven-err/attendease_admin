@@ -15,7 +15,12 @@ export type StudentStatus = (typeof STUDENT_STATUSES)[number];
 export const SESSION_STATUSES = ["Draft", "Open", "Closed", "Archived"] as const;
 export type AttendanceSessionStatus = (typeof SESSION_STATUSES)[number];
 
-export const ATTENDANCE_STATUSES = ["Present", "Late", "Absent"] as const;
+export const ATTENDANCE_STATUSES = [
+  "Present",
+  "Late",
+  "Late (Excused)",
+  "Absent",
+] as const;
 export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 
 export type AppUserProfile = {
@@ -110,6 +115,17 @@ export type StudentFormInput = {
   academic_year: string;
 };
 
+/** Device/mod profile under an attendance_checker login account. */
+export type CheckerProfileRow = {
+  id: string;
+  display_name: string;
+  profile_role: "moderator" | "checker";
+  status: "active" | "inactive";
+  setup_completed: boolean;
+  /** True when this profile's previous hashed PIN can still be restored. */
+  canRestorePreviousPin?: boolean;
+};
+
 export type CheckerRow = {
   id: string;
   full_name: string;
@@ -117,6 +133,10 @@ export type CheckerRow = {
   department: string | null;
   checker_scope: "department" | "ssg" | "employee";
   status: "active" | "inactive" | "archived";
+  /** True when a previous hashed PIN can still be restored (undo window). */
+  canRestorePreviousPin?: boolean;
+  /** All checker_profiles for this account (moderator + checker); never filtered by role. */
+  profiles?: CheckerProfileRow[];
 };
 
 export type StaffWithAssignment = {
@@ -125,6 +145,7 @@ export type StaffWithAssignment = {
   full_name: string;
   person_status: string;
   qr_token: string | null;
+  assignment_id: string | null;
   department: string | null;
   job_title: string | null;
   assignment_status: string | null;
@@ -136,8 +157,8 @@ export type SessionWithStats = AttendanceSession & {
   checker_name: string | null;
   present_count: number;
   late_count: number;
+  late_excused_count: number;
   absent_count: number;
-  on_time_count: number;
 };
 
 export type MainSessionGroup = {
@@ -159,6 +180,7 @@ export type SessionAttendanceRow = {
   year_level: string | null;
   time_in: string | null;
   time_out: string | null;
+  scan_by: string | null;
   attendance_status: ResolvedAttendanceStatus;
 };
 
@@ -173,6 +195,7 @@ export type AttendanceReportRow = {
   year_level: string | null;
   time_in: string | null;
   time_out: string | null;
+  scan_by: string | null;
   attendance_status: ResolvedAttendanceStatus;
 };
 

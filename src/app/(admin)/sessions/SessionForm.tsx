@@ -27,6 +27,7 @@ type SessionFormProps = {
   /** Prefill when adding a sub-session from a main card. */
   defaultMainSessionId?: string | null;
   lockOrganization?: boolean;
+  lockedDepartment?: string | null;
   onSubmit: (formData: FormData) => void;
 };
 
@@ -37,6 +38,7 @@ export function SessionForm({
   mainSessions,
   defaultMainSessionId = null,
   lockOrganization = false,
+  lockedDepartment = null,
   onSubmit,
 }: SessionFormProps) {
   const isEdit = Boolean(session);
@@ -56,6 +58,20 @@ export function SessionForm({
       main.status === "Active" ||
       (isEdit && main.id === session?.main_session_id)
   );
+  const departmentOptions = lockedDepartment
+    ? [lockedDepartment]
+    : [...DEPARTMENTS];
+  const inheritedDepartment =
+    session?.department ??
+    activeMains.find((main) => main.id === mainSessionId)?.department ??
+    "";
+  const defaultDepartment =
+    lockedDepartment ||
+    inheritedDepartment ||
+    (departmentOptions.length === 1 ? departmentOptions[0] : "");
+  const checkerOptions = lockedDepartment
+    ? checkers.filter((checker) => checker.department === lockedDepartment)
+    : checkers;
 
   return (
     <form
@@ -218,22 +234,21 @@ export function SessionForm({
           <label className="mb-1 block text-sm font-bold">Department</label>
           <select
             name="department"
-            defaultValue={
-              session?.department ??
-              activeMains.find((main) => main.id === mainSessionId)
-                ?.department ??
-              ""
-            }
+            defaultValue={defaultDepartment}
             required
+            disabled={Boolean(lockedDepartment)}
             className={inputClass}
           >
-            <option value="">Select department</option>
-            {DEPARTMENTS.map((dept) => (
+            {!lockedDepartment && <option value="">Select department</option>}
+            {departmentOptions.map((dept) => (
               <option key={dept} value={dept}>
                 {dept}
               </option>
             ))}
           </select>
+          {lockedDepartment && (
+            <input type="hidden" name="department" value={lockedDepartment} />
+          )}
         </div>
         <div>
           <label className="mb-1 block text-sm font-bold">Assigned Checker</label>
@@ -243,7 +258,7 @@ export function SessionForm({
             className={inputClass}
           >
             <option value="">Unassigned</option>
-            {checkers.map((checker) => (
+            {checkerOptions.map((checker) => (
               <option key={checker.id} value={checker.id}>
                 {checker.full_name}
                 {checker.department ? ` (${checker.department})` : ""}

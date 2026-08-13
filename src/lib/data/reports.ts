@@ -1,3 +1,4 @@
+import { matchesAttendanceStatusFilter } from "@/lib/attendance";
 import { AttendanceReportRow } from "@/lib/attendeaseTypes";
 import { getSessionAttendanceRoster } from "@/lib/data/session-attendance";
 import {
@@ -123,6 +124,7 @@ async function buildAttendanceReportRows(
         year_level: row.year_level,
         time_in: row.time_in,
         time_out: row.time_out,
+        scan_by: row.scan_by,
         attendance_status: row.attendance_status,
       });
     }
@@ -150,8 +152,8 @@ function applyReportFilters(
   }
 
   if (params.status && params.status !== "all") {
-    list = list.filter(
-      (record) => record.attendance_status === params.status
+    list = list.filter((record) =>
+      matchesAttendanceStatusFilter(record, params.status)
     );
   }
 
@@ -199,13 +201,19 @@ export async function getReportsPageData(
     sessionId: "all",
   });
 
+  // Stats ignore status so other counts stay intact while filtering the table.
+  const statsRecords = applyReportFilters(allRecords, {
+    ...params,
+    status: "all",
+  });
+
   return {
     records: paginated.items,
     total: paginated.total,
     page: paginated.page,
     pageSize: paginated.pageSize,
     totalPages: paginated.totalPages,
-    stats: buildReportStats(filtered),
+    stats: buildReportStats(statsRecords),
     sessions,
     recordCountBySession: countRecordsBySession(recordsWithoutSessionFilter),
   };

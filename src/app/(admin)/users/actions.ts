@@ -136,11 +136,20 @@ export async function createPortalUser(
   const tempPassword = generateTempPassword();
   const admin = createAdminClient();
 
+  // auth.users insert fires handle_new_user(), which creates public.users.
+  // Pass role/department in metadata so the stub row is correct, then upsert
+  // remaining profile fields (do not insert — that hits users_pkey).
   const { data: authUser, error: authError } = await admin.auth.admin.createUser({
     email,
     password: tempPassword,
     email_confirm: true,
-    user_metadata: { full_name: fullName },
+    user_metadata: {
+      full_name: fullName,
+      role,
+      ...(role === DEPARTMENT_ADMIN_ROLE && department
+        ? { department }
+        : {}),
+    },
   });
 
   if (authError || !authUser.user) {
@@ -150,20 +159,23 @@ export async function createPortalUser(
     };
   }
 
-  const supabase = await createClient();
-  const { error: insertError } = await supabase.from("users").insert({
-    id: authUser.user.id,
-    full_name: fullName,
-    email,
-    role,
-    status: "active",
-    department: role === DEPARTMENT_ADMIN_ROLE ? department : null,
-    checker_scope: "department",
-  });
+  const { error: profileError } = await admin.from("users").upsert(
+    {
+      id: authUser.user.id,
+      full_name: fullName,
+      email,
+      role,
+      status: "active",
+      department: role === DEPARTMENT_ADMIN_ROLE ? department : null,
+      checker_scope: "department",
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" }
+  );
 
-  if (insertError) {
+  if (profileError) {
     await admin.auth.admin.deleteUser(authUser.user.id);
-    return { success: false, error: insertError.message };
+    return { success: false, error: profileError.message };
   }
 
   if (role === DEPARTMENT_ADMIN_ROLE) {
@@ -323,27 +335,50 @@ export async function resetPortalUserPassword(
   if ("error" in auth) return auth.error;
   const { profile } = auth;
 
+  if (!userId) return { success: false, error: "User ID is required." };
+
   const supabase = await createClient();
   const { data: user } = await supabase
     .from("users")
     .select("id, email, role")
     .eq("id", userId)
+    .in("role", [ADMIN_ROLE, DEPARTMENT_ADMIN_ROLE])
     .maybeSingle();
 
-  if (!user?.email) return { success: false, error: "User not found." };
+  if (!user?.email) {
+    return {
+      success: false,
+      error: "Portal user not found. Only admin accounts can be reset here.",
+    };
+  }
+
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch {
+    return {
+      success: false,
+      error:
+        "Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to your environment variables.",
+    };
+  }
 
   const tempPassword = generateTempPassword();
-  const admin = createAdminClient();
   const { error } = await admin.auth.admin.updateUserById(userId, {
     password: tempPassword,
   });
-  if (error) return { success: false, error: error.message };
+  if (error) {
+    return {
+      success: false,
+      error: error.message ?? "Failed to reset password.",
+    };
+  }
 
   await writeAuditLog(profile, {
     action: "user.reset_password",
     targetType: "user",
     targetId: userId,
-    metadata: { email: user.email },
+    metadata: { email: user.email, role: user.role },
   });
 
   return { success: true, tempPassword, userId };

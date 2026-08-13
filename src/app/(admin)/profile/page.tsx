@@ -1,5 +1,6 @@
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getPortalProfile } from "@/lib/auth";
+import { ChangePasswordForm } from "./ChangePasswordForm";
 
 export default async function ProfilePage() {
   const profile = await getPortalProfile();
@@ -39,6 +40,8 @@ export default async function ProfilePage() {
           <p className="text-sm capitalize text-foreground">{profile?.status}</p>
         </div>
       </div>
+
+      <ChangePasswordForm />
     </div>
   );
 }

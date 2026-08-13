@@ -17,12 +17,14 @@ type StaffDbRow = {
   updated_at: string;
   staff_assignments:
     | {
+        id: string;
         department: string;
         job_title: string | null;
         status: string;
         created_at: string;
       }[]
     | {
+        id: string;
         department: string;
         job_title: string | null;
         status: string;
@@ -40,6 +42,7 @@ const STAFF_SELECT = `
   created_at,
   updated_at,
   staff_assignments (
+    id,
     department,
     job_title,
     status,
@@ -50,6 +53,7 @@ const STAFF_SELECT = `
 function pickLatestAssignment(
   assignments: StaffDbRow["staff_assignments"]
 ): {
+  id: string;
   department: string;
   job_title: string | null;
   status: string;
@@ -62,6 +66,7 @@ function pickLatestAssignment(
 
   return list.reduce<
     | {
+        id: string;
         department: string;
         job_title: string | null;
         status: string;
@@ -83,6 +88,7 @@ function mapStaffRows(rows: StaffDbRow[]): StaffWithAssignment[] {
       full_name: row.full_name,
       person_status: row.person_status,
       qr_token: row.qr_token,
+      assignment_id: assignment?.id ?? null,
       department: assignment?.department ?? null,
       job_title: assignment?.job_title ?? null,
       assignment_status: assignment?.status ?? null,
@@ -106,28 +112,25 @@ export async function getStaffPaginated(
   const { page, pageSize } = params;
   const search = params.search?.trim() ?? "";
   const department = params.department?.trim() ?? "all";
+  const hasDepartmentFilter = Boolean(department && department !== "all");
 
-  let personIds: string[] | null = null;
-  if (department && department !== "all") {
-    const { data: assignments } = await supabase
-      .from("staff_assignments")
-      .select("person_id")
-      .eq("department", department);
-
-    personIds = [...new Set((assignments ?? []).map((row) => row.person_id))];
-    if (personIds.length === 0) {
-      return buildPaginatedResult([], 0, page, pageSize);
-    }
-  }
-
+  // Filter via !inner instead of loading every person UUID into `.in()`.
   let query = supabase
     .from("people")
-    .select(STAFF_SELECT, { count: "exact" })
+    .select(
+      hasDepartmentFilter
+        ? STAFF_SELECT.replace(
+            "staff_assignments (",
+            "staff_assignments!inner ("
+          )
+        : STAFF_SELECT,
+      { count: "exact" }
+    )
     .eq("person_kind", "staff")
     .order("full_name", { ascending: true });
 
-  if (personIds) {
-    query = query.in("id", personIds);
+  if (hasDepartmentFilter) {
+    query = query.eq("staff_assignments.department", department);
   }
 
   if (search) {

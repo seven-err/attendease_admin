@@ -3,7 +3,10 @@
 import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useDashboardRealtime } from "@/lib/hooks/useDashboardRealtime";
-import { usePollingFallback } from "@/lib/hooks/useAttendanceRealtime";
+import {
+  FALLBACK_POLL_MS,
+  usePollingFallback,
+} from "@/lib/hooks/useAttendanceRealtime";
 
 export function DashboardRealtime({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -12,8 +15,8 @@ export function DashboardRealtime({ children }: { children: React.ReactNode }) {
     router.refresh();
   }, [router]);
 
-  useDashboardRealtime(refresh);
-  usePollingFallback(refresh, true, 5000);
+  const { realtimeReady } = useDashboardRealtime(refresh);
+  usePollingFallback(refresh, realtimeReady === false, FALLBACK_POLL_MS);
 
   return <>{children}</>;
 }

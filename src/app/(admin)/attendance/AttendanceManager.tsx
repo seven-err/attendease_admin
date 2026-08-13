@@ -12,16 +12,26 @@ import {
   useAttendanceRosterFilters,
 } from "@/components/attendance/AttendanceRosterFilters";
 import type { SessionAttendanceRow, SessionWithStats } from "@/lib/attendeaseTypes";
+import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@/lib/attendeaseTypes";
 import { summarizeAttendanceStatuses } from "@/lib/attendance";
 import { downloadCsv } from "@/lib/export-attendance";
 import {
+  displayAttendanceStatus,
+  displayAttendanceStatusLabel,
   displaySessionStatus,
   formatDate,
-  formatDateTimeOrDash,
+  formatClockTimeOrDash,
+  formatTimeOutDisplay,
   formatTimeRange,
+  manilaDateTimeLocalToIso,
   resolvedAttendanceStatusVariant,
   sessionStatusVariant,
+  toManilaDateTimeLocal,
 } from "@/lib/format";
+import {
+  ExportModeModal,
+  type ExportModeSelection,
+} from "@/components/reports/ExportModeModal";
 import { fetchSessionAttendance } from "@/app/(admin)/sessions/actions";
 import {
   exportSessionAttendanceCsv,
@@ -53,11 +63,10 @@ export function AttendanceManager({
   const [success, setSuccess] = useState<string | null>(null);
   const [editRow, setEditRow] = useState<SessionAttendanceRow | null>(null);
   const [voidRow, setVoidRow] = useState<SessionAttendanceRow | null>(null);
-  const [editStatus, setEditStatus] = useState<"Present" | "Late" | "Absent">(
-    "Present"
-  );
+  const [editStatus, setEditStatus] = useState<AttendanceStatus>("Present");
   const [editTimeIn, setEditTimeIn] = useState("");
   const [editTimeOut, setEditTimeOut] = useState("");
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   const selected = useMemo(
     () => sessions.find((s) => s.id === selectedId) ?? null,
@@ -82,6 +91,7 @@ export function AttendanceManager({
     setYearFilter,
     statusFilter,
     setStatusFilter,
+    summaryRows,
     filteredRows,
   } = useAttendanceRosterFilters(rows);
 
@@ -113,25 +123,23 @@ export function AttendanceManager({
   }, [selectedId, loadRoster]);
 
   const summary = useMemo(
-    () =>
-      summarizeAttendanceStatuses(
-        filteredRows.map((row) => row.attendance_status)
-      ),
-    [filteredRows]
+    () => summarizeAttendanceStatuses(summaryRows),
+    [summaryRows]
   );
 
   function openEdit(row: SessionAttendanceRow) {
     setEditRow(row);
+    const status = row.attendance_status;
     setEditStatus(
-      row.attendance_status === "Late"
-        ? "Late"
-        : row.attendance_status === "Absent" ||
-            row.attendance_status === "Voided"
-          ? "Absent"
-          : "Present"
+      status === "Late" ||
+        status === "Late (Excused)" ||
+        status === "Present" ||
+        status === "Absent"
+        ? status
+        : "Absent"
     );
-    setEditTimeIn(row.time_in ? row.time_in.slice(0, 16) : "");
-    setEditTimeOut(row.time_out ? row.time_out.slice(0, 16) : "");
+    setEditTimeIn(toManilaDateTimeLocal(row.time_in));
+    setEditTimeOut(toManilaDateTimeLocal(row.time_out));
     setError(null);
   }
 
@@ -140,8 +148,8 @@ export function AttendanceManager({
     setError(null);
     startTransition(async () => {
       const result = await updateAttendanceLog(editRow.id, {
-        scanned_at: editTimeIn ? new Date(editTimeIn).toISOString() : null,
-        time_out_at: editTimeOut ? new Date(editTimeOut).toISOString() : null,
+        scanned_at: manilaDateTimeLocalToIso(editTimeIn),
+        time_out_at: manilaDateTimeLocalToIso(editTimeOut),
         attendance_status: editStatus,
       });
       if (!result.success) {
@@ -171,18 +179,29 @@ export function AttendanceManager({
     });
   }
 
-  function handleExport() {
-    if (!selectedId) return;
+  async function handleExport({
+    mode,
+    summaryColumns,
+  }: ExportModeSelection): Promise<boolean> {
+    if (!selectedId) return false;
     setError(null);
-    startTransition(async () => {
-      const result = await exportSessionAttendanceCsv(selectedId);
-      if (!result.success) {
-        setError(result.error);
-        return;
-      }
-      downloadCsv(result.filename, result.csv);
-      setSuccess("Attendance CSV exported.");
-    });
+    const result = await exportSessionAttendanceCsv(
+      selectedId,
+      statusFilter,
+      mode,
+      summaryColumns
+    );
+    if (!result.success) {
+      setError(result.error);
+      return false;
+    }
+    downloadCsv(result.filename, result.csv);
+    setSuccess(
+      mode === "summary"
+        ? "Attendance summary CSV exported."
+        : "Attendance CSV exported."
+    );
+    return true;
   }
 
   return (
@@ -214,7 +233,7 @@ export function AttendanceManager({
             canExport ? (
               <Button
                 variant="secondary"
-                onClick={handleExport}
+                onClick={() => setExportModalOpen(true)}
                 disabled={isPending || !selectedId}
               >
                 <Download className="size-4" />
@@ -222,6 +241,14 @@ export function AttendanceManager({
               </Button>
             ) : null
           }
+        />
+
+        <ExportModeModal
+          open={exportModalOpen}
+          onClose={() => setExportModalOpen(false)}
+          onExport={handleExport}
+          disabled={!selectedId || filteredRows.length === 0}
+          recordCount={filteredRows.length}
         />
 
         <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -300,29 +327,35 @@ export function AttendanceManager({
                   showStatusFilter
                 />
 
-                <div className="grid gap-3 sm:grid-cols-4">
-                  <div className="rounded border border-border px-3 py-2 text-sm">
-                    <p className="text-text-secondary">Present</p>
-                    <p className="text-xl font-bold text-green-600">
+                <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-5">
+                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                    <p className="truncate text-text-secondary">Present</p>
+                    <p className="text-xl font-bold tabular-nums text-green-600">
                       {summary.present}
                     </p>
                   </div>
-                  <div className="rounded border border-border px-3 py-2 text-sm">
-                    <p className="text-text-secondary">On Time</p>
-                    <p className="text-xl font-bold text-green-600">
-                      {summary.onTime}
-                    </p>
-                  </div>
-                  <div className="rounded border border-border px-3 py-2 text-sm">
-                    <p className="text-text-secondary">Late</p>
-                    <p className="text-xl font-bold text-red-500">
+                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                    <p className="truncate text-text-secondary">Late</p>
+                    <p className="text-xl font-bold tabular-nums text-red-500">
                       {summary.late}
                     </p>
                   </div>
-                  <div className="rounded border border-border px-3 py-2 text-sm">
-                    <p className="text-text-secondary">Absent</p>
-                    <p className="text-xl font-bold text-maroon">
+                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                    <p className="truncate text-text-secondary">Late (Excused)</p>
+                    <p className="text-xl font-bold tabular-nums text-amber-700">
+                      {summary.lateExcused}
+                    </p>
+                  </div>
+                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                    <p className="truncate text-text-secondary">Absent</p>
+                    <p className="text-xl font-bold tabular-nums text-maroon">
                       {summary.absent}
+                    </p>
+                  </div>
+                  <div className="col-span-2 min-w-0 rounded border border-border px-3 py-2 text-sm lg:col-span-1">
+                    <p className="truncate text-text-secondary">No Time Out</p>
+                    <p className="text-xl font-bold tabular-nums text-text-secondary">
+                      {summary.noTimeOut}
                     </p>
                   </div>
                 </div>
@@ -333,13 +366,14 @@ export function AttendanceManager({
                   </p>
                 ) : (
                   <div className="max-h-[55vh] overflow-auto rounded border border-border">
-                    <table className="w-full min-w-[720px] text-sm">
+                    <table className="w-full min-w-[820px] text-sm">
                       <thead className="sticky top-0 border-b border-border bg-header-bg">
                         <tr className="text-left text-[11px] font-bold uppercase text-text-secondary">
                           <th className="px-4 py-3">Student #</th>
                           <th className="px-4 py-3">Name</th>
                           <th className="px-4 py-3">Time In</th>
                           <th className="px-4 py-3">Time Out</th>
+                          <th className="px-4 py-3">Scan By</th>
                           <th className="px-4 py-3">Status</th>
                           {(canEdit || canVoid) && (
                             <th className="px-4 py-3 text-right">Actions</th>
@@ -350,7 +384,7 @@ export function AttendanceManager({
                         {filteredRows.length === 0 ? (
                           <tr>
                             <td
-                              colSpan={canEdit || canVoid ? 6 : 5}
+                              colSpan={canEdit || canVoid ? 7 : 6}
                               className="px-4 py-8 text-center text-text-secondary"
                             >
                               No students match filters.
@@ -372,10 +406,13 @@ export function AttendanceManager({
                                   {row.student_name}
                                 </td>
                                 <td className="px-4 py-3 text-text-secondary">
-                                  {formatDateTimeOrDash(row.time_in)}
+                                  {formatClockTimeOrDash(row.time_in)}
                                 </td>
                                 <td className="px-4 py-3 text-text-secondary">
-                                  {formatDateTimeOrDash(row.time_out)}
+                                  {formatTimeOutDisplay(row.time_in, row.time_out)}
+                                </td>
+                                <td className="px-4 py-3 text-text-secondary">
+                                  {row.scan_by ?? "—"}
                                 </td>
                                 <td className="px-4 py-3">
                                   <Badge
@@ -383,7 +420,7 @@ export function AttendanceManager({
                                       row.attendance_status
                                     )}
                                   >
-                                    {row.attendance_status.toUpperCase()}
+                                    {displayAttendanceStatus(row.attendance_status)}
                                   </Badge>
                                 </td>
                                 {(canEdit || canVoid) && (
@@ -470,12 +507,14 @@ export function AttendanceManager({
               className="select-field w-full"
               value={editStatus}
               onChange={(e) =>
-                setEditStatus(e.target.value as "Present" | "Late" | "Absent")
+                setEditStatus(e.target.value as AttendanceStatus)
               }
             >
-              <option value="Present">Present</option>
-              <option value="Late">Late</option>
-              <option value="Absent">Absent</option>
+              {ATTENDANCE_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {displayAttendanceStatusLabel(status)}
+                </option>
+              ))}
             </select>
           </div>
           <div>

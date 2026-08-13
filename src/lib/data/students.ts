@@ -27,15 +27,7 @@ type StudentWithAcademicRows = {
   student_academic_records: AcademicRecordRow[] | AcademicRecordRow | null;
 };
 
-const STUDENT_SELECT = `
-  id,
-  student_number,
-  full_name,
-  student_status,
-  qr_token,
-  created_at,
-  updated_at,
-  student_academic_records (
+const ACADEMIC_FIELDS = `
     id,
     student_id,
     department,
@@ -43,8 +35,24 @@ const STUDENT_SELECT = `
     year_level,
     academic_year,
     created_at
-  )
 `;
+
+function buildStudentSelect(innerAcademic: boolean): string {
+  const academicRelation = innerAcademic
+    ? `student_academic_records!inner (${ACADEMIC_FIELDS})`
+    : `student_academic_records (${ACADEMIC_FIELDS})`;
+
+  return `
+  id,
+  student_number,
+  full_name,
+  student_status,
+  qr_token,
+  created_at,
+  updated_at,
+  ${academicRelation}
+`;
+}
 
 function pickLatestAcademicRecord(
   records: AcademicRecordRow[] | AcademicRecordRow | null | undefined
@@ -81,46 +89,6 @@ function mapStudentRows(
   });
 }
 
-async function getStudentIdsMatchingAcademicSearch(
-  search: string
-): Promise<string[]> {
-  const supabase = await createClient();
-  const pattern = `%${search}%`;
-
-  const { data } = await supabase
-    .from("student_academic_records")
-    .select("student_id")
-    .or(`department.ilike.${pattern},course.ilike.${pattern}`);
-
-  return [...new Set((data ?? []).map((row) => row.student_id))];
-}
-
-async function getStudentIdsForAcademicFilters(
-  department?: string,
-  yearLevel?: string
-): Promise<string[] | null> {
-  const dept = department?.trim();
-  const year = yearLevel?.trim();
-
-  if ((!dept || dept === "all") && (!year || year === "all")) {
-    return null;
-  }
-
-  const supabase = await createClient();
-  let query = supabase.from("student_academic_records").select("student_id");
-
-  if (dept && dept !== "all") {
-    query = query.eq("department", dept);
-  }
-
-  if (year && year !== "all") {
-    query = query.eq("year_level", year);
-  }
-
-  const { data } = await query;
-  return [...new Set((data ?? []).map((row) => row.student_id))];
-}
-
 export type StudentsQueryParams = {
   page: number;
   pageSize: number;
@@ -135,39 +103,31 @@ export async function getStudentsPaginated(
   const supabase = await createClient();
   const { page, pageSize } = params;
   const search = params.search?.trim() ?? "";
+  const dept = params.department?.trim() ?? "all";
+  const year = params.yearLevel?.trim() ?? "all";
+  const hasAcademicFilter =
+    (Boolean(dept) && dept !== "all") || (Boolean(year) && year !== "all");
 
-  const academicFilterIds = await getStudentIdsForAcademicFilters(
-    params.department,
-    params.yearLevel
-  );
-
-  if (academicFilterIds !== null && academicFilterIds.length === 0) {
-    return buildPaginatedResult([], 0, page, pageSize);
-  }
-
-  let matchingIds: string[] | null = null;
-  if (search) {
-    matchingIds = await getStudentIdsMatchingAcademicSearch(search);
-  }
-
+  // Filter via !inner instead of collecting every matching UUID into `.in()`.
+  // Large departments (400+ students) made the old `.in()` URL fail and return an empty list.
   let query = supabase
     .from("students")
-    .select(STUDENT_SELECT, { count: "exact" })
+    .select(buildStudentSelect(hasAcademicFilter), { count: "exact" })
     .order("student_number", { ascending: true });
 
-  if (academicFilterIds !== null) {
-    query = query.in("id", academicFilterIds);
+  if (dept && dept !== "all") {
+    query = query.eq("student_academic_records.department", dept);
+  }
+
+  if (year && year !== "all") {
+    query = query.eq("student_academic_records.year_level", year);
   }
 
   if (search) {
     const pattern = `%${search}%`;
-    const filters = [`student_number.ilike.${pattern}`, `full_name.ilike.${pattern}`];
-
-    if (matchingIds && matchingIds.length > 0) {
-      filters.push(`id.in.(${matchingIds.join(",")})`);
-    }
-
-    query = query.or(filters.join(","));
+    query = query.or(
+      `student_number.ilike.${pattern},full_name.ilike.${pattern}`
+    );
   }
 
   const { from, to } = getRange(page, pageSize);
@@ -200,7 +160,7 @@ export async function getStudents(): Promise<StudentWithAcademic[]> {
 
   const { data: students, error } = await supabase
     .from("students")
-    .select(STUDENT_SELECT)
+    .select(buildStudentSelect(false))
     .order("student_number", { ascending: true });
 
   if (error || !students?.length) return [];

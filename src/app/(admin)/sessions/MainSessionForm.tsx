@@ -13,18 +13,27 @@ const inputClass =
 type MainSessionFormProps = {
   formId: string;
   mainSession?: MainSession | null;
+  lockedDepartment?: string | null;
   onSubmit: (formData: FormData) => void;
 };
 
 export function MainSessionForm({
   formId,
   mainSession,
+  lockedDepartment = null,
   onSubmit,
 }: MainSessionFormProps) {
   const isEdit = Boolean(mainSession);
   const statusOptions = MAIN_SESSION_STATUSES.filter(
     (status) => status !== "Trashed" && (isEdit || status === "Active")
   );
+  const departmentOptions = lockedDepartment
+    ? [lockedDepartment]
+    : [...DEPARTMENTS];
+  const defaultDepartment =
+    lockedDepartment ||
+    mainSession?.department ||
+    (departmentOptions.length === 1 ? departmentOptions[0] : "");
 
   return (
     <form
@@ -62,17 +71,21 @@ export function MainSessionForm({
           <label className="mb-1 block text-sm font-bold">Department</label>
           <select
             name="department"
-            defaultValue={mainSession?.department ?? ""}
+            defaultValue={defaultDepartment}
             required
+            disabled={Boolean(lockedDepartment)}
             className={inputClass}
           >
-            <option value="">Select department</option>
-            {DEPARTMENTS.map((dept) => (
+            {!lockedDepartment && <option value="">Select department</option>}
+            {departmentOptions.map((dept) => (
               <option key={dept} value={dept}>
                 {dept}
               </option>
             ))}
           </select>
+          {lockedDepartment && (
+            <input type="hidden" name="department" value={lockedDepartment} />
+          )}
         </div>
         <div>
           <label className="mb-1 block text-sm font-bold">Academic Year</label>
