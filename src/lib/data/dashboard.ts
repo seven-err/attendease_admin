@@ -14,30 +14,37 @@ async function fetchDashboardStats(
 ): Promise<DashboardStats> {
   const { start, end } = manilaDayBounds(today);
 
-  const [checkers, students, openSessions, scans] = await Promise.all([
-    supabase
-      .from("users")
-      .select("id", { count: "exact", head: true })
-      .eq("role", CHECKER_ROLE)
-      .eq("status", "active"),
-    supabase.from("students").select("id", { count: "exact", head: true }),
-    supabase
-      .from("attendance_sessions")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "Open")
-      .eq("date", today),
-    supabase
-      .from("attendance_logs")
-      .select("id", { count: "exact", head: true })
-      .gte("scanned_at", start)
-      .lte("scanned_at", end),
-  ]);
+  const [checkers, students, openSessions, timeInScans, timeOutOnlyScans] =
+    await Promise.all([
+      supabase
+        .from("users")
+        .select("id", { count: "exact", head: true })
+        .eq("role", CHECKER_ROLE)
+        .eq("status", "active"),
+      supabase.from("students").select("id", { count: "exact", head: true }),
+      supabase
+        .from("attendance_sessions")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "Open")
+        .eq("date", today),
+      supabase
+        .from("attendance_logs")
+        .select("id", { count: "exact", head: true })
+        .gte("scanned_at", start)
+        .lte("scanned_at", end),
+      supabase
+        .from("attendance_logs")
+        .select("id", { count: "exact", head: true })
+        .is("scanned_at", null)
+        .gte("time_out_at", start)
+        .lte("time_out_at", end),
+    ]);
 
   return {
     activeCheckers: checkers.count ?? 0,
     totalStudents: students.count ?? 0,
     openSessionsToday: openSessions.count ?? 0,
-    scansToday: scans.count ?? 0,
+    scansToday: (timeInScans.count ?? 0) + (timeOutOnlyScans.count ?? 0),
   };
 }
 
@@ -93,26 +100,31 @@ export async function getRecentActivity(
 
   const { data: logs, error } = await supabase
     .from("attendance_logs")
-    .select("scanned_at, students(full_name), attendance_sessions(title)")
-    .order("scanned_at", { ascending: false })
+    .select("scanned_at, time_out_at, updated_at, students(full_name), attendance_sessions(title)")
+    .order("updated_at", { ascending: false })
     .limit(limit);
 
   if (error || !logs?.length) return [];
 
-  return logs.map((log) => {
-    const student = Array.isArray(log.students)
-      ? log.students[0]
-      : log.students;
-    const session = Array.isArray(log.attendance_sessions)
-      ? log.attendance_sessions[0]
-      : log.attendance_sessions;
+  return logs
+    .map((log) => {
+      const student = Array.isArray(log.students)
+        ? log.students[0]
+        : log.students;
+      const session = Array.isArray(log.attendance_sessions)
+        ? log.attendance_sessions[0]
+        : log.attendance_sessions;
+      const scannedAt =
+        log.scanned_at ?? log.time_out_at ?? log.updated_at ?? null;
+      if (!scannedAt) return null;
 
-    return {
-      student_name:
-        (student as { full_name: string } | null)?.full_name ?? "Unknown",
-      session_title:
-        (session as { title: string } | null)?.title ?? "Unknown",
-      scanned_at: log.scanned_at,
-    };
-  });
+      return {
+        student_name:
+          (student as { full_name: string } | null)?.full_name ?? "Unknown",
+        session_title:
+          (session as { title: string } | null)?.title ?? "Unknown",
+        scanned_at: scannedAt,
+      };
+    })
+    .filter((row): row is RecentActivityRow => row !== null);
 }

@@ -6,6 +6,7 @@ import { can, canAny, scopedDepartment, type PermissionKey } from "@/lib/permiss
 import { createClient } from "@/lib/supabase/server";
 import {
   parseSessionForm,
+  resolvedSessionPenalties,
   SESSION_DELETE_CONFIRMATION,
   SessionActionResult,
   sessionPayloadFromInput,
@@ -14,10 +15,12 @@ import {
 import {
   mainSessionPayloadFromInput,
   parseMainSessionForm,
+  resolvedMainSessionPenalties,
   validateMainSessionForm,
 } from "@/lib/validations/main-session";
 import { getSessionAttendanceRoster } from "@/lib/data/session-attendance";
 import type { SessionAttendanceRow } from "@/lib/attendeaseTypes";
+import { resolvePenaltiesInherited } from "@/lib/penalties";
 
 export type SessionAttendanceResult =
   | { success: true; rows: SessionAttendanceRow[] }
@@ -105,6 +108,43 @@ function revalidateSessionPaths() {
   revalidatePath("/reports");
   revalidateTag("dashboard-stats", "max");
   revalidateTag("report-stats", "max");
+}
+
+async function inheritedFlagForSession(
+  input: ReturnType<typeof parseSessionForm>
+): Promise<boolean> {
+  if (!input.main_session_id) return false;
+  const penalties = resolvedSessionPenalties(input);
+  return sessionPenaltiesAreInherited(
+    input.main_session_id,
+    penalties.penalty_late_php,
+    penalties.penalty_absent_php,
+    penalties.penalty_incomplete_php
+  );
+}
+
+async function sessionPenaltiesAreInherited(
+  mainSessionId: string,
+  late: number,
+  absent: number,
+  incomplete: number
+): Promise<boolean> {
+  const supabase = await createClient();
+  const { data: main } = await supabase
+    .from("main_sessions")
+    .select("penalty_late_php, penalty_absent_php, penalty_incomplete_php")
+    .eq("id", mainSessionId)
+    .maybeSingle();
+  if (!main) return true;
+  return resolvePenaltiesInherited({
+    mainSessionId,
+    late,
+    absent,
+    incomplete,
+    mainLate: main.penalty_late_php,
+    mainAbsent: main.penalty_absent_php,
+    mainIncomplete: main.penalty_incomplete_php,
+  });
 }
 
 async function assertMainSessionAccessible(
@@ -196,6 +236,18 @@ export async function updateMainSession(
     };
   }
 
+  const penalties = resolvedMainSessionPenalties(input);
+  await supabase
+    .from("attendance_sessions")
+    .update({
+      penalty_late_php: penalties.penalty_late_php,
+      penalty_absent_php: penalties.penalty_absent_php,
+      penalty_incomplete_php: penalties.penalty_incomplete_php,
+    })
+    .eq("main_session_id", mainSessionId)
+    .eq("penalties_inherited", true)
+    .in("status", ["Draft", "Open"]);
+
   revalidateSessionPaths();
   return { success: true };
 }
@@ -271,10 +323,11 @@ export async function createSession(
 
   const profile = await getPortalProfile();
   const supabase = await createClient();
+  const inherited = await inheritedFlagForSession(input);
 
   const { error } = await supabase
     .from("attendance_sessions")
-    .insert(sessionPayloadFromInput(input, profile?.id ?? null));
+    .insert(sessionPayloadFromInput(input, profile?.id ?? null, inherited));
 
   if (error) {
     return {
@@ -316,9 +369,10 @@ export async function updateSession(
   }
 
   const supabase = await createClient();
+  const inherited = await inheritedFlagForSession(input);
   const { error } = await supabase
     .from("attendance_sessions")
-    .update(sessionPayloadFromInput(input))
+    .update(sessionPayloadFromInput(input, undefined, inherited))
     .eq("id", sessionId);
 
   if (error) {

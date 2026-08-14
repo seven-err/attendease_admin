@@ -2,7 +2,8 @@ import { AttendanceStatus } from "@/lib/attendeaseTypes";
 
 export type ResolvedAttendanceStatus =
   | AttendanceStatus
-  | "Voided";
+  | "Voided"
+  | "No Time In";
 
 export type AttendanceSummaryInput = {
   attendance_status: ResolvedAttendanceStatus;
@@ -12,11 +13,15 @@ export type AttendanceSummaryInput = {
 
 export function resolveAttendanceStatus(
   scannedAt: string | null | undefined,
-  _timeOutAt: string | null | undefined,
+  timeOutAt: string | null | undefined,
   storedStatus?: string | null
 ): ResolvedAttendanceStatus {
   if (storedStatus === "Voided") return "Voided";
-  if (!scannedAt) return "Absent";
+  if (!scannedAt) {
+    // Time Out-only (checker app): scanned_at null, time_out_at set, no Time In status.
+    if (timeOutAt) return "No Time In";
+    return "Absent";
+  }
   if (storedStatus === "Late (Excused)") return "Late (Excused)";
   if (storedStatus === "Late") return "Late";
   return "Present";
@@ -36,8 +41,18 @@ export function hasNoTimeOut(
   return Boolean(scannedAt && !timeOutAt);
 }
 
+export function hasNoTimeIn(
+  scannedAt: string | null | undefined,
+  timeOutAt: string | null | undefined
+): boolean {
+  return Boolean(!scannedAt && timeOutAt);
+}
+
 /** Status filter value for students who timed in but never timed out. */
 export const NO_TIME_OUT_FILTER = "No Time Out" as const;
+
+/** Status filter value for students who timed out without timing in. */
+export const NO_TIME_IN_FILTER = "No Time In" as const;
 
 export function matchesAttendanceStatusFilter(
   row: AttendanceSummaryInput,
@@ -46,6 +61,9 @@ export function matchesAttendanceStatusFilter(
   if (!statusFilter || statusFilter === "all") return true;
   if (statusFilter === NO_TIME_OUT_FILTER) {
     return hasNoTimeOut(row.time_in, row.time_out);
+  }
+  if (statusFilter === NO_TIME_IN_FILTER) {
+    return hasNoTimeIn(row.time_in, row.time_out);
   }
   return row.attendance_status === statusFilter;
 }
@@ -56,6 +74,7 @@ export type AttendanceCountSummary = {
   lateExcused: number;
   absent: number;
   noTimeOut: number;
+  noTimeIn: number;
 };
 
 export function emptyAttendanceSummary(): AttendanceCountSummary {
@@ -65,6 +84,7 @@ export function emptyAttendanceSummary(): AttendanceCountSummary {
     lateExcused: 0,
     absent: 0,
     noTimeOut: 0,
+    noTimeIn: 0,
   };
 }
 
@@ -78,10 +98,13 @@ export function summarizeAttendanceStatuses(
     if (status === "Present") summary.present++;
     else if (status === "Late") summary.late++;
     else if (status === "Late (Excused)") summary.lateExcused++;
-    else summary.absent++;
+    else if (status === "Absent" || status === "Voided") summary.absent++;
 
     if (hasNoTimeOut(row.time_in, row.time_out)) {
       summary.noTimeOut++;
+    }
+    if (hasNoTimeIn(row.time_in, row.time_out)) {
+      summary.noTimeIn++;
     }
   }
 

@@ -16,11 +16,18 @@ import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@/lib/attendeaseType
 import { summarizeAttendanceStatuses } from "@/lib/attendance";
 import { downloadCsv } from "@/lib/export-attendance";
 import {
+  assessRecordPenalty,
+  formatPenaltyRatesSummary,
+  formatPeso,
+  penaltyContextFromSession,
+  sumFinalizedPenalties,
+} from "@/lib/penalties";
+import {
   displayAttendanceStatus,
   displayAttendanceStatusLabel,
   displaySessionStatus,
   formatDate,
-  formatClockTimeOrDash,
+  formatTimeInDisplay,
   formatTimeOutDisplay,
   formatTimeRange,
   manilaDateTimeLocalToIso,
@@ -127,6 +134,42 @@ export function AttendanceManager({
     [summaryRows]
   );
 
+  const selectedPenalties = useMemo(
+    () =>
+      selected
+        ? penaltyContextFromSession({
+            status: selected.status,
+            date: selected.date,
+            start_time: selected.start_time,
+            end_time: selected.end_time,
+            time_in_start: selected.time_in_start,
+            time_in_end: selected.time_in_end,
+            time_out_start: selected.time_out_start,
+            time_out_end: selected.time_out_end,
+            penalty_late_php: selected.penalty_late_php,
+            penalty_absent_php: selected.penalty_absent_php,
+            penalty_incomplete_php: selected.penalty_incomplete_php,
+          })
+        : null,
+    [selected]
+  );
+
+  const penaltyTotal = useMemo(
+    () =>
+      sumFinalizedPenalties(
+        filteredRows.map((row) =>
+          assessRecordPenalty({
+            time_in: row.time_in,
+            time_out: row.time_out,
+            attendance_status: row.attendance_status,
+            person_kind: row.person_kind,
+            session_penalties: selectedPenalties ?? undefined,
+          })
+        )
+      ),
+    [filteredRows, selectedPenalties]
+  );
+
   function openEdit(row: SessionAttendanceRow) {
     setEditRow(row);
     const status = row.attendance_status;
@@ -136,7 +179,7 @@ export function AttendanceManager({
         status === "Present" ||
         status === "Absent"
         ? status
-        : "Absent"
+        : "Present"
     );
     setEditTimeIn(toManilaDateTimeLocal(row.time_in));
     setEditTimeOut(toManilaDateTimeLocal(row.time_out));
@@ -146,11 +189,17 @@ export function AttendanceManager({
   function handleSaveEdit() {
     if (!editRow) return;
     setError(null);
+    const scannedAt = manilaDateTimeLocalToIso(editTimeIn);
+    const timeOutAt = manilaDateTimeLocalToIso(editTimeOut);
+    if (!scannedAt && !timeOutAt) {
+      setError("Time in or time out is required.");
+      return;
+    }
     startTransition(async () => {
       const result = await updateAttendanceLog(editRow.id, {
-        scanned_at: manilaDateTimeLocalToIso(editTimeIn),
-        time_out_at: manilaDateTimeLocalToIso(editTimeOut),
-        attendance_status: editStatus,
+        scanned_at: scannedAt,
+        time_out_at: timeOutAt,
+        attendance_status: scannedAt ? editStatus : undefined,
       });
       if (!result.success) {
         setError(result.error);
@@ -327,38 +376,66 @@ export function AttendanceManager({
                   showStatusFilter
                 />
 
-                <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-5">
-                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                  <div className="min-w-0 overflow-hidden rounded border border-border px-3 py-2 text-sm">
                     <p className="truncate text-text-secondary">Present</p>
                     <p className="text-xl font-bold tabular-nums text-green-600">
                       {summary.present}
                     </p>
                   </div>
-                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                  <div className="min-w-0 overflow-hidden rounded border border-border px-3 py-2 text-sm">
                     <p className="truncate text-text-secondary">Late</p>
                     <p className="text-xl font-bold tabular-nums text-red-500">
                       {summary.late}
                     </p>
                   </div>
-                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                  <div className="min-w-0 overflow-hidden rounded border border-border px-3 py-2 text-sm">
                     <p className="truncate text-text-secondary">Late (Excused)</p>
                     <p className="text-xl font-bold tabular-nums text-amber-700">
                       {summary.lateExcused}
                     </p>
                   </div>
-                  <div className="min-w-0 rounded border border-border px-3 py-2 text-sm">
+                  <div className="min-w-0 overflow-hidden rounded border border-border px-3 py-2 text-sm">
                     <p className="truncate text-text-secondary">Absent</p>
                     <p className="text-xl font-bold tabular-nums text-maroon">
                       {summary.absent}
                     </p>
                   </div>
-                  <div className="col-span-2 min-w-0 rounded border border-border px-3 py-2 text-sm lg:col-span-1">
+                  <div className="min-w-0 overflow-hidden rounded border border-border px-3 py-2 text-sm">
                     <p className="truncate text-text-secondary">No Time Out</p>
                     <p className="text-xl font-bold tabular-nums text-text-secondary">
                       {summary.noTimeOut}
                     </p>
                   </div>
+                  <div className="min-w-0 overflow-hidden rounded border border-border px-3 py-2 text-sm">
+                    <p className="truncate text-text-secondary">No Time In</p>
+                    <p className="text-xl font-bold tabular-nums text-text-secondary">
+                      {summary.noTimeIn}
+                    </p>
+                  </div>
+                  <div className="min-w-0 overflow-hidden rounded border border-border px-3 py-2 text-sm sm:col-span-2 lg:col-span-2">
+                    <p className="truncate text-text-secondary">Penalties</p>
+                    <p className="truncate text-xl font-bold tabular-nums text-maroon">
+                      {formatPeso(penaltyTotal)}
+                    </p>
+                  </div>
                 </div>
+
+                {selectedPenalties && (
+                  <p className="text-xs text-text-muted">
+                    Rates:{" "}
+                    {formatPenaltyRatesSummary({
+                      latePhp: selectedPenalties.penalty_late_php,
+                      absentPhp: selectedPenalties.penalty_absent_php,
+                      incompletePhp: selectedPenalties.penalty_incomplete_php,
+                    })}
+                  </p>
+                )}
+
+                <p className="text-xs text-text-muted">
+                  Present means timed in on time (with or without time out). Time
+                  Out without Time In is No Time In, not Absent.
+                </p>
 
                 {loading && rows.length === 0 ? (
                   <p className="py-8 text-center text-sm text-text-secondary">
@@ -366,15 +443,15 @@ export function AttendanceManager({
                   </p>
                 ) : (
                   <div className="max-h-[55vh] overflow-auto rounded border border-border">
-                    <table className="w-full min-w-[820px] text-sm">
+                    <table className="w-full min-w-[880px] text-sm">
                       <thead className="sticky top-0 border-b border-border bg-header-bg">
                         <tr className="text-left text-[11px] font-bold uppercase text-text-secondary">
-                          <th className="px-4 py-3">Student #</th>
                           <th className="px-4 py-3">Name</th>
                           <th className="px-4 py-3">Time In</th>
                           <th className="px-4 py-3">Time Out</th>
                           <th className="px-4 py-3">Scan By</th>
                           <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3">Penalty</th>
                           {(canEdit || canVoid) && (
                             <th className="px-4 py-3 text-right">Actions</th>
                           )}
@@ -394,19 +471,23 @@ export function AttendanceManager({
                           filteredRows.map((row) => {
                             const hasLog = !row.id.startsWith("absent-");
                             const isVoided = row.attendance_status === "Voided";
+                            const penalty = assessRecordPenalty({
+                              time_in: row.time_in,
+                              time_out: row.time_out,
+                              attendance_status: row.attendance_status,
+                              person_kind: row.person_kind,
+                              session_penalties: selectedPenalties ?? undefined,
+                            });
                             return (
                               <tr
                                 key={row.id}
                                 className="border-b border-border"
                               >
-                                <td className="px-4 py-3 font-mono">
-                                  {row.student_number}
-                                </td>
                                 <td className="px-4 py-3 font-bold">
                                   {row.student_name}
                                 </td>
                                 <td className="px-4 py-3 text-text-secondary">
-                                  {formatClockTimeOrDash(row.time_in)}
+                                  {formatTimeInDisplay(row.time_in, row.time_out)}
                                 </td>
                                 <td className="px-4 py-3 text-text-secondary">
                                   {formatTimeOutDisplay(row.time_in, row.time_out)}
@@ -422,6 +503,9 @@ export function AttendanceManager({
                                   >
                                     {displayAttendanceStatus(row.attendance_status)}
                                   </Badge>
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 tabular-nums text-text-secondary">
+                                  {penalty.label}
                                 </td>
                                 {(canEdit || canVoid) && (
                                   <td className="px-4 py-3 text-right">
@@ -506,6 +590,7 @@ export function AttendanceManager({
             <select
               className="select-field w-full"
               value={editStatus}
+              disabled={!editTimeIn}
               onChange={(e) =>
                 setEditStatus(e.target.value as AttendanceStatus)
               }
@@ -516,6 +601,12 @@ export function AttendanceManager({
                 </option>
               ))}
             </select>
+            {!editTimeIn && (
+              <p className="mt-1 text-xs text-text-muted">
+                Time Out without Time In has no Present/Late status until a
+                time in is recorded.
+              </p>
+            )}
           </div>
           <div>
             <label className="label-field-sm">Time in</label>

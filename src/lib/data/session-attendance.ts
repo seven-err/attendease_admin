@@ -31,9 +31,9 @@ type AttendanceLogRow = {
   id: string;
   student_id: string;
   checker_id: string | null;
-  scanned_at: string;
+  scanned_at: string | null;
   time_out_at: string | null;
-  attendance_status: string;
+  attendance_status: string | null;
   device_id: string | null;
 };
 
@@ -42,7 +42,7 @@ type AttendanceLogCountRow = {
   student_id: string;
   scanned_at: string | null;
   time_out_at: string | null;
-  attendance_status: string;
+  attendance_status: string | null;
   device_id: string | null;
 };
 
@@ -310,7 +310,7 @@ function tallyScopedCounts(
     if (status === "Present") sessionCounts.present++;
     else if (status === "Late") sessionCounts.late++;
     else if (status === "Late (Excused)") sessionCounts.lateExcused++;
-    else sessionCounts.absent++;
+    else if (status === "Absent" || status === "Voided") sessionCounts.absent++;
   }
 
   return sessionCounts;
@@ -377,6 +377,7 @@ export async function getSessionAttendanceRoster(
         ? (checkerMap.get(log.checker_id) ?? null)
         : null,
       attendance_status: status,
+      person_kind: "student",
     });
   }
 

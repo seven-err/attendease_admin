@@ -5,7 +5,6 @@ import { Modal } from "@/components/ui/Modal";
 import { SummaryStatusPicker } from "@/components/reports/SummaryStatusPicker";
 import { ReportSessionOption } from "@/lib/data/report-utils";
 import {
-  DEFAULT_SUMMARY_STATUS_COLUMNS,
   type AttendanceExportMode,
   type SummaryStatusColumn,
 } from "@/lib/export-attendance";
@@ -44,7 +43,7 @@ export function ExportSessionModal({
   const [exportMode, setExportMode] =
     useState<AttendanceExportMode>("detailed");
   const [summaryColumns, setSummaryColumns] = useState<SummaryStatusColumn[]>(
-    [...DEFAULT_SUMMARY_STATUS_COLUMNS]
+    []
   );
   const [exporting, setExporting] = useState(false);
 
@@ -52,7 +51,7 @@ export function ExportSessionModal({
     if (open) {
       setSelectedIds(allSessionIds);
       setExportMode("detailed");
-      setSummaryColumns([...DEFAULT_SUMMARY_STATUS_COLUMNS]);
+      setSummaryColumns([]);
       setExporting(false);
     }
   }, [open, allSessionIds]);
@@ -190,8 +189,9 @@ export function ExportSessionModal({
             <span className="min-w-0">
               <span className="block text-sm font-bold">Summary</span>
               <span className="text-xs text-text-secondary">
-                One row per student with the status counts you select. Total
-                Sessions is included only when exporting multiple sessions.
+                One row per student with the status counts you select. Only
+                students who have those statuses are included. Total Sessions
+                is included only when exporting multiple sessions.
               </span>
             </span>
           </label>

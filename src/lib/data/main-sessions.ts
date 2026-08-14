@@ -1,4 +1,8 @@
 import { MainSession, MainSessionStatus } from "@/lib/attendeaseTypes";
+import {
+  coercePenaltyPhp,
+  resolveIncompletePenaltyPhp,
+} from "@/lib/penalties";
 import { createClient } from "@/lib/supabase/server";
 
 const DEFAULT_MAIN_LIMIT = 100;
@@ -13,6 +17,9 @@ type MainSessionRow = {
   created_at: string;
   updated_at: string;
   status: MainSessionStatus | null;
+  penalty_late_php: number;
+  penalty_absent_php: number;
+  penalty_incomplete_php: number;
 };
 
 export async function getMainSessions(
@@ -23,7 +30,7 @@ export async function getMainSessions(
   const { data: mains, error } = await supabase
     .from("main_sessions")
     .select(
-      "id, name, description, academic_year, department, created_by, created_at, updated_at, status"
+      "id, name, description, academic_year, department, created_by, created_at, updated_at, status, penalty_late_php, penalty_absent_php, penalty_incomplete_php"
     )
     .neq("status", "Trashed")
     .order("created_at", { ascending: false })
@@ -58,5 +65,11 @@ export async function getMainSessions(
     updated_at: main.updated_at,
     status: main.status ?? "Active",
     sub_session_count: counts.get(main.id) ?? 0,
+    penalty_late_php: coercePenaltyPhp(main.penalty_late_php),
+    penalty_absent_php: coercePenaltyPhp(main.penalty_absent_php),
+    penalty_incomplete_php: resolveIncompletePenaltyPhp(
+      main.penalty_absent_php,
+      main.penalty_incomplete_php
+    ),
   }));
 }

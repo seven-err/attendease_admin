@@ -1,5 +1,5 @@
 import { summarizeAttendanceStatuses } from "@/lib/attendance";
-import { AttendanceReportRow } from "@/lib/attendeaseTypes";
+import { AttendanceReportRow, PenaltySessionContext } from "@/lib/attendeaseTypes";
 
 export type ReportStats = {
   presentPercent: number;
@@ -7,6 +7,7 @@ export type ReportStats = {
   lateExcusedPercent: number;
   absentPercent: number;
   noTimeOutPercent: number;
+  noTimeInPercent: number;
   totalRecords: number;
 };
 
@@ -15,6 +16,7 @@ export type ReportSessionOption = {
   title: string;
   date: string;
   department: string | null;
+  penalties: PenaltySessionContext;
 };
 
 export function buildReportStats(records: AttendanceReportRow[]): ReportStats {
@@ -26,6 +28,7 @@ export function buildReportStats(records: AttendanceReportRow[]): ReportStats {
       lateExcusedPercent: 0,
       absentPercent: 0,
       noTimeOutPercent: 0,
+      noTimeInPercent: 0,
       totalRecords: 0,
     };
   }
@@ -38,6 +41,7 @@ export function buildReportStats(records: AttendanceReportRow[]): ReportStats {
     lateExcusedPercent: Math.round((summary.lateExcused / total) * 100),
     absentPercent: Math.round((summary.absent / total) * 100),
     noTimeOutPercent: Math.round((summary.noTimeOut / total) * 100),
+    noTimeInPercent: Math.round((summary.noTimeIn / total) * 100),
     totalRecords: total,
   };
 }

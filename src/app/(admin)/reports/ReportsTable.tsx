@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Pagination } from "@/components/ui/Pagination";
 import { AttendanceReportRow } from "@/lib/attendeaseTypes";
@@ -14,11 +14,11 @@ import {
   displayAttendanceStatus,
   displayAttendanceStatusLabel,
   formatDate,
-  formatClockTimeOrDash,
+  formatTimeInDisplay,
   formatTimeOutDisplay,
   resolvedAttendanceStatusVariant,
 } from "@/lib/format";
-import { NO_TIME_OUT_FILTER } from "@/lib/attendance";
+import { NO_TIME_IN_FILTER, NO_TIME_OUT_FILTER } from "@/lib/attendance";
 import { ExportSessionModal } from "@/components/reports/ExportSessionModal";
 import { useListParams } from "@/lib/hooks/useListParams";
 import type { PageSize } from "@/lib/pagination";
@@ -27,6 +27,7 @@ import {
   exportAttendanceReportRows,
   exportAttendanceSummaryRows,
 } from "@/lib/export-attendance";
+import { assessRecordPenalty, formatPeso, sumFinalizedPenalties } from "@/lib/penalties";
 import { exportReports } from "./actions";
 import { Download, Search } from "lucide-react";
 import { ATTENDANCE_STATUSES } from "@/lib/attendeaseTypes";
@@ -69,6 +70,14 @@ export function ReportsTable({
   const { searchInput, setSearchInput, setPage, setPageSize, updateParams } =
     useListParams(query.search ?? "");
   const [exportModalOpen, setExportModalOpen] = useState(false);
+
+  const pagePenaltyTotal = useMemo(
+    () =>
+      sumFinalizedPenalties(
+        records.map((record) => assessRecordPenalty(record))
+      ),
+    [records]
+  );
 
   useEffect(() => {
     setRecords(initialRecords);
@@ -130,7 +139,7 @@ export function ReportsTable({
 
   return (
     <div className="mx-auto max-w-7xl space-y-4">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold">Reports & Analytics</h2>
           <p className="text-sm text-text-secondary">
@@ -255,44 +264,57 @@ export function ReportsTable({
               </option>
             ))}
             <option value={NO_TIME_OUT_FILTER}>{NO_TIME_OUT_FILTER}</option>
+            <option value={NO_TIME_IN_FILTER}>{NO_TIME_IN_FILTER}</option>
             <option value="Voided">Voided</option>
           </select>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <div className="rounded-[10px] border border-border bg-white p-4">
-          <p className="text-sm text-text-secondary">Present</p>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">Present</p>
           <p className="mt-2 text-3xl font-bold text-green-600">
             {stats.presentPercent}%
           </p>
         </div>
-        <div className="rounded-[10px] border border-border bg-white p-4">
-          <p className="text-sm text-text-secondary">Late</p>
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">Late</p>
           <p className="mt-2 text-3xl font-bold text-red-500">
             {stats.latePercent}%
           </p>
         </div>
-        <div className="rounded-[10px] border border-border bg-white p-4">
-          <p className="text-sm text-text-secondary">Late (Excused)</p>
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">Late (Excused)</p>
           <p className="mt-2 text-3xl font-bold text-amber-700">
             {stats.lateExcusedPercent}%
           </p>
         </div>
-        <div className="rounded-[10px] border border-border bg-white p-4">
-          <p className="text-sm text-text-secondary">Absent</p>
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">Absent</p>
           <p className="mt-2 text-3xl font-bold text-maroon">
             {stats.absentPercent}%
           </p>
         </div>
-        <div className="rounded-[10px] border border-border bg-white p-4">
-          <p className="text-sm text-text-secondary">No Time Out</p>
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">No Time Out</p>
           <p className="mt-2 text-3xl font-bold text-text-secondary">
             {stats.noTimeOutPercent}%
           </p>
         </div>
-        <div className="rounded-[10px] border border-border bg-white p-4">
-          <p className="text-sm text-text-secondary">Total Records</p>
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">No Time In</p>
+          <p className="mt-2 text-3xl font-bold text-text-secondary">
+            {stats.noTimeInPercent}%
+          </p>
+        </div>
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">Penalties (page)</p>
+          <p className="mt-2 truncate text-2xl font-bold tabular-nums text-maroon sm:text-3xl">
+            {formatPeso(pagePenaltyTotal)}
+          </p>
+        </div>
+        <div className="min-w-0 overflow-hidden rounded-[10px] border border-border bg-white p-4">
+          <p className="truncate text-sm text-text-secondary">Total Records</p>
           <p className="mt-2 text-3xl font-bold">{stats.totalRecords}</p>
           <p className="text-xs text-text-secondary">Matching filters</p>
         </div>
@@ -308,10 +330,9 @@ export function ReportsTable({
           </span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[940px] text-sm">
             <thead className="border-b border-border">
               <tr className="text-left text-[11px] font-bold uppercase text-text-secondary">
-                <th className="px-4 py-3">Student #</th>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Department</th>
                 <th className="px-4 py-3">Year</th>
@@ -321,6 +342,7 @@ export function ReportsTable({
                 <th className="px-4 py-3">Time Out</th>
                 <th className="px-4 py-3">Scan By</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Penalty</th>
               </tr>
             </thead>
             <tbody>
@@ -334,12 +356,11 @@ export function ReportsTable({
                   </td>
                 </tr>
               ) : (
-                records.map((record) => (
+                records.map((record) => {
+                  const penalty = assessRecordPenalty(record);
+                  return (
                   <tr key={record.id} className="border-b border-border">
-                    <td className="px-4 py-4 font-bold text-maroon">
-                      {record.student_number}
-                    </td>
-                    <td className="px-4 py-4">{record.student_name}</td>
+                    <td className="px-4 py-4 font-bold">{record.student_name}</td>
                     <td className="px-4 py-4">
                       {record.department ? (
                         <Badge dept={record.department}>
@@ -357,7 +378,7 @@ export function ReportsTable({
                       {record.session_title}
                     </td>
                     <td className="px-4 py-4 text-text-secondary">
-                      {formatClockTimeOrDash(record.time_in)}
+                      {formatTimeInDisplay(record.time_in, record.time_out)}
                     </td>
                     <td className="px-4 py-4 text-text-secondary">
                       {formatTimeOutDisplay(record.time_in, record.time_out)}
@@ -374,8 +395,12 @@ export function ReportsTable({
                         {displayAttendanceStatus(record.attendance_status)}
                       </Badge>
                     </td>
+                    <td className="whitespace-nowrap px-4 py-4 tabular-nums text-text-secondary">
+                      {penalty.label}
+                    </td>
                   </tr>
-                ))
+                );
+                })
               )}
             </tbody>
           </table>

@@ -33,6 +33,7 @@ import {
   sessionStatusVariant,
 } from "@/lib/format";
 import { exportMainSessionAttendanceCsv } from "@/app/(admin)/attendance/actions";
+import { formatPenaltyRatesSummary } from "@/lib/penalties";
 import {
   archiveMainSession,
   archiveSession,
@@ -201,6 +202,13 @@ function SessionCard({
             <span className="min-w-0 break-words">
               {session.checker_name ?? "Unassigned"}
             </span>
+          </p>
+          <p className="text-xs text-text-muted">
+            {formatPenaltyRatesSummary({
+              latePhp: session.penalty_late_php,
+              absentPhp: session.penalty_absent_php,
+              incompletePhp: session.penalty_incomplete_php,
+            })}
           </p>
         </div>
         <div className="mt-auto pt-3">
@@ -826,6 +834,13 @@ export function SessionsGrid({
                                 ? ` · ${main.academic_year}`
                                 : ""}
                             </p>
+                            <p className="mt-1 text-xs text-text-muted">
+                              {formatPenaltyRatesSummary({
+                                latePhp: main.penalty_late_php,
+                                absentPhp: main.penalty_absent_php,
+                                incompletePhp: main.penalty_incomplete_php,
+                              })}
+                            </p>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             {canExport && (
@@ -1110,6 +1125,19 @@ export function SessionsGrid({
             sessionTitle={viewSession.title}
             sessionDate={viewSession.date}
             mainSessionName={viewSession.main_session_name}
+            sessionPenalties={{
+              status: viewSession.status,
+              date: viewSession.date,
+              start_time: viewSession.start_time,
+              end_time: viewSession.end_time,
+              time_in_start: viewSession.time_in_start,
+              time_in_end: viewSession.time_in_end,
+              time_out_start: viewSession.time_out_start,
+              time_out_end: viewSession.time_out_end,
+              penalty_late_php: viewSession.penalty_late_php,
+              penalty_absent_php: viewSession.penalty_absent_php,
+              penalty_incomplete_php: viewSession.penalty_incomplete_php,
+            }}
           />
         )}
       </Modal>

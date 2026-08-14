@@ -1,6 +1,7 @@
 import { matchesAttendanceStatusFilter } from "@/lib/attendance";
-import { AttendanceReportRow } from "@/lib/attendeaseTypes";
+import { AttendanceReportRow, PenaltySessionContext } from "@/lib/attendeaseTypes";
 import { getSessionAttendanceRoster } from "@/lib/data/session-attendance";
+import { penaltyContextFromSession } from "@/lib/penalties";
 import {
   buildPaginatedResult,
   getRange,
@@ -84,7 +85,9 @@ async function getSessionsForReports(
 
   let query = supabase
     .from("attendance_sessions")
-    .select("id, title, date, department")
+    .select(
+      "id, title, date, department, status, start_time, end_time, time_in_start, time_in_end, time_out_start, time_out_end, penalty_late_php, penalty_absent_php, penalty_incomplete_php"
+    )
     .in("status", ["Open", "Closed", "Archived"])
     .gte("date", params.fromDate)
     .lte("date", params.toDate)
@@ -102,7 +105,25 @@ async function getSessionsForReports(
   const { data, error } = await query;
 
   if (error || !data) return [];
-  return data;
+  return data.map((session) => ({
+    id: session.id,
+    title: session.title,
+    date: session.date,
+    department: session.department,
+    penalties: penaltyContextFromSession({
+      status: session.status,
+      date: session.date,
+      start_time: session.start_time,
+      end_time: session.end_time,
+      time_in_start: session.time_in_start,
+      time_in_end: session.time_in_end,
+      time_out_start: session.time_out_start,
+      time_out_end: session.time_out_end,
+      penalty_late_php: session.penalty_late_php,
+      penalty_absent_php: session.penalty_absent_php,
+      penalty_incomplete_php: session.penalty_incomplete_php,
+    }),
+  }));
 }
 
 async function buildAttendanceReportRows(
@@ -126,6 +147,8 @@ async function buildAttendanceReportRows(
         time_out: row.time_out,
         scan_by: row.scan_by,
         attendance_status: row.attendance_status,
+        person_kind: row.person_kind ?? "student",
+        session_penalties: session.penalties,
       });
     }
   }

@@ -64,6 +64,16 @@ export function formatClockTimeOrDash(iso: string | null | undefined): string {
   return formatClockTime(iso);
 }
 
+/** Time In column: show "No Time In" when timed out without time in. */
+export function formatTimeInDisplay(
+  timeIn: string | null | undefined,
+  timeOut: string | null | undefined
+): string {
+  if (timeIn) return formatClockTime(timeIn);
+  if (timeOut) return "No Time In";
+  return "—";
+}
+
 /** Time Out column: show "No Time Out" when timed in without time out. */
 export function formatTimeOutDisplay(
   timeIn: string | null | undefined,
@@ -159,7 +169,12 @@ export function sessionStatusVariant(
 
 export function resolvedAttendanceStatusVariant(
   status: ResolvedAttendanceStatus
-): "status-present" | "status-late" | "status-late-excused" | "status-absent" {
+):
+  | "status-present"
+  | "status-late"
+  | "status-late-excused"
+  | "status-absent"
+  | "status-draft" {
   switch (status) {
     case "Present":
       return "status-present";
@@ -167,6 +182,8 @@ export function resolvedAttendanceStatusVariant(
       return "status-late";
     case "Late (Excused)":
       return "status-late-excused";
+    case "No Time In":
+      return "status-draft";
     case "Absent":
     case "Voided":
       return "status-absent";

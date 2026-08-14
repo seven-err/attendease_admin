@@ -1,10 +1,13 @@
 "use client";
 
+import { useState } from "react";
+import { PenaltyRatesFields } from "@/components/sessions/PenaltyRatesFields";
 import {
   MAIN_SESSION_STATUSES,
   MainSession,
 } from "@/lib/attendeaseTypes";
 import { DEPARTMENTS } from "@/lib/constants";
+import { penaltyFormFromRates } from "@/lib/penalties";
 import { currentAcademicYear } from "@/lib/validations/student";
 
 const inputClass =
@@ -34,6 +37,13 @@ export function MainSessionForm({
     lockedDepartment ||
     mainSession?.department ||
     (departmentOptions.length === 1 ? departmentOptions[0] : "");
+  const [penalties, setPenalties] = useState(() =>
+    penaltyFormFromRates(
+      mainSession?.penalty_late_php,
+      mainSession?.penalty_absent_php,
+      mainSession?.penalty_incomplete_php
+    )
+  );
 
   return (
     <form
@@ -113,9 +123,12 @@ export function MainSessionForm({
         </select>
       </div>
 
+      <PenaltyRatesFields value={penalties} onChange={setPenalties} />
+
       <p className="text-xs text-text-muted">
-        Main sessions group related attendance sessions (sub-sessions). Use a
-        standalone session when the event does not belong under a main session.
+        Main sessions group related attendance sessions (sub-sessions). New
+        sub-sessions copy these penalty rates. Editing them updates Draft and
+        Open sub-sessions that still inherit.
       </p>
     </form>
   );

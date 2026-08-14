@@ -58,6 +58,20 @@ export type StudentAcademicRecord = {
 export const MAIN_SESSION_STATUSES = ["Active", "Archived", "Trashed"] as const;
 export type MainSessionStatus = (typeof MAIN_SESSION_STATUSES)[number];
 
+export type PenaltySessionContext = {
+  status: AttendanceSessionStatus;
+  date: string;
+  start_time: string;
+  end_time: string;
+  time_in_start: string | null;
+  time_in_end: string | null;
+  time_out_start: string | null;
+  time_out_end: string | null;
+  penalty_late_php: number;
+  penalty_absent_php: number;
+  penalty_incomplete_php: number;
+};
+
 export type AttendanceSession = {
   id: string;
   title: string;
@@ -80,6 +94,11 @@ export type AttendanceSession = {
   assigned_checker_id: string | null;
   created_by: string | null;
   status: AttendanceSessionStatus;
+  penalty_late_php: number;
+  penalty_absent_php: number;
+  penalty_incomplete_php: number;
+  /** True when sub-session rates still match the parent main session. */
+  penalties_inherited?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -95,6 +114,9 @@ export type MainSession = {
   updated_at: string;
   status: MainSessionStatus;
   sub_session_count: number;
+  penalty_late_php: number;
+  penalty_absent_php: number;
+  penalty_incomplete_php: number;
 };
 
 export type StudentWithAcademic = StudentRecord & {
@@ -182,6 +204,7 @@ export type SessionAttendanceRow = {
   time_out: string | null;
   scan_by: string | null;
   attendance_status: ResolvedAttendanceStatus;
+  person_kind?: "student" | "staff" | null;
 };
 
 export type AttendanceReportRow = {
@@ -197,6 +220,9 @@ export type AttendanceReportRow = {
   time_out: string | null;
   scan_by: string | null;
   attendance_status: ResolvedAttendanceStatus;
+  person_kind?: "student" | "staff" | null;
+  /** Session rates used to compute the per-row penalty. */
+  session_penalties?: PenaltySessionContext;
 };
 
 export type DashboardStats = {

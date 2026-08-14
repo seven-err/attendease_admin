@@ -33,7 +33,8 @@ export function SummaryStatusPicker({
     <fieldset className="space-y-2 rounded border border-border p-3">
       <legend className="px-1 text-sm font-bold">Statuses to summarize</legend>
       <p className="px-2 text-xs text-text-secondary">
-        Select one or more status columns to include in the summary CSV.
+        Choose the statuses to export. If Absent is 20, select only Absent to
+        export those 20 students — students with 0 are left out.
       </p>
       <label className="flex cursor-pointer items-center gap-3 rounded px-2 py-2 hover:bg-gray-50">
         <input

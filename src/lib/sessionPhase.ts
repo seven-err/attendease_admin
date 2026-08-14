@@ -1,4 +1,6 @@
+import { APP_TIMEZONE } from "@/lib/constants";
 import { AttendanceSession } from "@/lib/attendeaseTypes";
+import { todayDateString } from "@/lib/format";
 
 export type ResolvedPhaseTimes = {
   timeInStart: string;
@@ -47,3 +49,43 @@ export const DEFAULT_PHASE_TIMES: ResolvedPhaseTimes = {
   timeOutStart: "09:30",
   timeOutEnd: "10:00",
 };
+
+function nowMinutesInAppTimezone(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(now);
+
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(
+    parts.find((part) => part.type === "minute")?.value ?? 0
+  );
+  return hour * 60 + minute;
+}
+
+/** True once the session date is past, or today at/after time-out end (Asia/Manila). */
+export function hasSessionEnded(
+  session: Pick<
+    AttendanceSession,
+    | "date"
+    | "start_time"
+    | "end_time"
+    | "time_in_start"
+    | "time_in_end"
+    | "time_out_start"
+    | "time_out_end"
+  >,
+  now = new Date()
+): boolean {
+  const today = todayDateString();
+  if (session.date < today) return true;
+  if (session.date > today) return false;
+
+  const timeOutEnd = parseStoredTimeToMinutes(
+    resolvePhaseTimes(session).timeOutEnd
+  );
+  if (timeOutEnd === null) return false;
+  return nowMinutesInAppTimezone(now) >= timeOutEnd;
+}

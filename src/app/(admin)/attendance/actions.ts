@@ -15,6 +15,7 @@ import {
   type AttendanceExportMode,
   type SummaryStatusColumn,
 } from "@/lib/export-attendance";
+import { penaltyContextFromSession } from "@/lib/penalties";
 import type { AttendanceReportRow, SessionWithStats } from "@/lib/attendeaseTypes";
 import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@/lib/attendeaseTypes";
 import { createClient } from "@/lib/supabase/server";
@@ -85,21 +86,28 @@ export async function updateAttendanceLog(
     };
   }
 
+  const nextScannedAt =
+    input.scanned_at !== undefined ? input.scanned_at : existing.scanned_at;
+  const nextTimeOutAt =
+    input.time_out_at !== undefined ? input.time_out_at : existing.time_out_at;
+
+  if (!nextScannedAt && !nextTimeOutAt) {
+    return {
+      success: false,
+      error: "Time in or time out is required for attendance logs.",
+    };
+  }
+
   const payload: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
     device_id: null,
   };
   if (input.scanned_at !== undefined) payload.scanned_at = input.scanned_at;
   if (input.time_out_at !== undefined) payload.time_out_at = input.time_out_at;
-  if (input.attendance_status !== undefined) {
+  if (!nextScannedAt && nextTimeOutAt) {
+    payload.attendance_status = null;
+  } else if (input.attendance_status !== undefined) {
     payload.attendance_status = input.attendance_status;
-  }
-
-  if (input.scanned_at === null) {
-    return {
-      success: false,
-      error: "Time in is required for attendance logs.",
-    };
   }
 
   const { error } = await supabase
@@ -214,7 +222,9 @@ export async function exportSessionAttendanceCsv(
   const supabase = await createClient();
   const { data: session } = await supabase
     .from("attendance_sessions")
-    .select("id, title, date, department, main_sessions(name)")
+    .select(
+      "id, title, date, department, status, start_time, end_time, time_in_start, time_in_end, time_out_start, time_out_end, penalty_late_php, penalty_absent_php, penalty_incomplete_php, main_sessions(name)"
+    )
     .eq("id", sessionId)
     .maybeSingle();
 
@@ -236,6 +246,20 @@ export async function exportSessionAttendanceCsv(
       ? rows.filter((row) => matchesAttendanceStatusFilter(row, statusFilter))
       : rows;
 
+  const sessionPenalties = penaltyContextFromSession({
+    status: session.status,
+    date: session.date,
+    start_time: session.start_time,
+    end_time: session.end_time,
+    time_in_start: session.time_in_start,
+    time_in_end: session.time_in_end,
+    time_out_start: session.time_out_start,
+    time_out_end: session.time_out_end,
+    penalty_late_php: session.penalty_late_php,
+    penalty_absent_php: session.penalty_absent_php,
+    penalty_incomplete_php: session.penalty_incomplete_php,
+  });
+
   const reportRows: AttendanceReportRow[] = filteredRows.map((row) => ({
     id: row.id,
     session_id: sessionId,
@@ -249,6 +273,8 @@ export async function exportSessionAttendanceCsv(
     time_out: row.time_out,
     scan_by: row.scan_by,
     attendance_status: row.attendance_status,
+    person_kind: row.person_kind ?? "student",
+    session_penalties: sessionPenalties,
   }));
 
   const mainJoined = session.main_sessions as
@@ -336,7 +362,9 @@ export async function exportMainSessionAttendanceCsv(
 
   const { data: subSessions, error: subError } = await supabase
     .from("attendance_sessions")
-    .select("id, title, date, department")
+    .select(
+      "id, title, date, department, status, start_time, end_time, time_in_start, time_in_end, time_out_start, time_out_end, penalty_late_php, penalty_absent_php, penalty_incomplete_php"
+    )
     .eq("main_session_id", mainSessionId)
     .in("status", ["Open", "Closed", "Archived"])
     .order("date", { ascending: true })
@@ -359,6 +387,19 @@ export async function exportMainSessionAttendanceCsv(
   const reportRows: AttendanceReportRow[] = [];
   for (const session of subSessions) {
     if (scope && session.department !== scope) continue;
+    const sessionPenalties = penaltyContextFromSession({
+      status: session.status,
+      date: session.date,
+      start_time: session.start_time,
+      end_time: session.end_time,
+      time_in_start: session.time_in_start,
+      time_in_end: session.time_in_end,
+      time_out_start: session.time_out_start,
+      time_out_end: session.time_out_end,
+      penalty_late_php: session.penalty_late_php,
+      penalty_absent_php: session.penalty_absent_php,
+      penalty_incomplete_php: session.penalty_incomplete_php,
+    });
     const roster = await getSessionAttendanceRoster(session.id);
     for (const row of roster) {
       reportRows.push({
@@ -374,6 +415,8 @@ export async function exportMainSessionAttendanceCsv(
         time_out: row.time_out,
         scan_by: row.scan_by,
         attendance_status: row.attendance_status,
+        person_kind: row.person_kind ?? "student",
+        session_penalties: sessionPenalties,
       });
     }
   }

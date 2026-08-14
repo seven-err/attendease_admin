@@ -17,7 +17,7 @@ type AttendanceLogStatusRow = {
   session_id: string;
   scanned_at: string | null;
   time_out_at: string | null;
-  attendance_status: string;
+  attendance_status: string | null;
   device_id?: string | null;
 };
 

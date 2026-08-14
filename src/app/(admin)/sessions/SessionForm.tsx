@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PenaltyRatesFields } from "@/components/sessions/PenaltyRatesFields";
 import {
   MainSession,
   SESSION_STATUSES,
@@ -8,6 +9,11 @@ import {
 } from "@/lib/attendeaseTypes";
 import { DEPARTMENTS, YEAR_LEVELS } from "@/lib/constants";
 import { SessionCheckerOption } from "@/lib/data/checkers";
+import {
+  parsePenaltyFormFields,
+  penaltyFormFromRates,
+  resolvePenaltiesInherited,
+} from "@/lib/penalties";
 import {
   DEFAULT_PHASE_TIMES,
   resolvePhaseTimes,
@@ -73,6 +79,49 @@ export function SessionForm({
     ? checkers.filter((checker) => checker.department === lockedDepartment)
     : checkers;
 
+  const initialParent = mainSessions.find((main) => main.id === initialMainId);
+  const [penalties, setPenalties] = useState(() =>
+    penaltyFormFromRates(
+      session?.penalty_late_php ?? initialParent?.penalty_late_php,
+      session?.penalty_absent_php ?? initialParent?.penalty_absent_php,
+      session?.penalty_incomplete_php ?? initialParent?.penalty_incomplete_php
+    )
+  );
+
+  const parentMain = activeMains.find((main) => main.id === mainSessionId);
+  const parsedPenalties = parsePenaltyFormFields(penalties);
+  const inheritedFromMain = Boolean(
+    organization === "sub" &&
+      parentMain &&
+      parsedPenalties.ok &&
+      resolvePenaltiesInherited({
+        mainSessionId: parentMain.id,
+        late: parsedPenalties.late,
+        absent: parsedPenalties.absent,
+        incomplete: parsedPenalties.incomplete,
+        mainLate: parentMain.penalty_late_php,
+        mainAbsent: parentMain.penalty_absent_php,
+        mainIncomplete: parentMain.penalty_incomplete_php,
+      })
+  );
+
+  function applyRatesFromMain(mainId: string) {
+    const main = mainSessions.find((item) => item.id === mainId);
+    if (!main) return;
+    setPenalties(
+      penaltyFormFromRates(
+        main.penalty_late_php,
+        main.penalty_absent_php,
+        main.penalty_incomplete_php
+      )
+    );
+  }
+
+  function applyMainDefaults() {
+    if (!parentMain) return;
+    applyRatesFromMain(parentMain.id);
+  }
+
   return (
     <form
       id={formId}
@@ -106,7 +155,12 @@ export function SessionForm({
               value="sub"
               checked={organization === "sub"}
               disabled={lockOrganization && Boolean(defaultMainSessionId)}
-              onChange={() => setOrganization("sub")}
+              onChange={() => {
+                setOrganization("sub");
+                if (!session && mainSessionId) {
+                  applyRatesFromMain(mainSessionId);
+                }
+              }}
             />
             Sub-session under a main
           </label>
@@ -120,7 +174,11 @@ export function SessionForm({
               value={mainSessionId}
               required
               disabled={lockOrganization && Boolean(defaultMainSessionId)}
-              onChange={(e) => setMainSessionId(e.target.value)}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                setMainSessionId(nextId);
+                if (!session && nextId) applyRatesFromMain(nextId);
+              }}
               className={inputClass}
             >
               <option value="">Select main session</option>
@@ -228,6 +286,17 @@ export function SessionForm({
           </div>
         </div>
       </div>
+
+      <PenaltyRatesFields
+        value={penalties}
+        onChange={setPenalties}
+        inheritedFromMain={inheritedFromMain}
+        onResetToMain={
+          organization === "sub" && parentMain && !inheritedFromMain
+            ? applyMainDefaults
+            : undefined
+        }
+      />
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div>

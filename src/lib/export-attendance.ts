@@ -1,9 +1,16 @@
 import {
   AttendanceReportRow,
+  PenaltySessionContext,
   SessionAttendanceRow,
 } from "@/lib/attendeaseTypes";
-import { hasNoTimeOut } from "@/lib/attendance";
+import { hasNoTimeIn, hasNoTimeOut } from "@/lib/attendance";
 import { formatDateTime } from "@/lib/format";
+import {
+  assessRecordPenalty,
+  exportPenaltyCell,
+  penaltyContextFromSession,
+  sumFinalizedPenalties,
+} from "@/lib/penalties";
 
 function escapeCsvCell(value: string | number | null | undefined): string {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -19,6 +26,16 @@ function buildCsv(headers: string[], rows: (string | number | null | undefined)[
 function exportPhDateTime(iso: string | null | undefined): string {
   if (!iso) return "";
   return formatDateTime(iso);
+}
+
+/** Time In CSV cell: "No Time In" when timed out without time in. */
+export function exportTimeInCell(
+  timeIn: string | null | undefined,
+  timeOut: string | null | undefined
+): string {
+  if (timeIn) return exportPhDateTime(timeIn);
+  if (timeOut) return "No Time In";
+  return "";
 }
 
 /** Time Out CSV cell: "No Time Out" when timed in without time out. */
@@ -117,28 +134,45 @@ const REPORT_HEADERS = [
   "Time Out (PHT)",
   "Scan By",
   "Status",
+  "Penalty (PHP)",
 ] as const;
 
-export function exportAttendanceReportRows(
-  records: AttendanceReportRow[],
-  filename = "attendance-report-detailed.csv"
-): void {
-  downloadCsv(filename, buildAttendanceReportCsv(records));
-}
+const PENALTY_TOTAL_LABEL = "Total Penalties (PHP)";
 
 export function buildAttendanceReportCsv(records: AttendanceReportRow[]): string {
-  const rows = records.map((record) => [
-    record.student_number,
-    record.student_name,
-    record.department ?? "",
-    record.year_level ?? "",
-    record.date,
-    record.session_title,
-    exportPhDateTime(record.time_in),
-    exportTimeOutCell(record.time_in, record.time_out),
-    record.scan_by ?? "",
-    record.attendance_status,
-  ]);
+  const rows = records.map((record) => {
+    const penalty = assessRecordPenalty(record);
+    return [
+      record.student_number,
+      record.student_name,
+      record.department ?? "",
+      record.year_level ?? "",
+      record.date,
+      record.session_title,
+      exportTimeInCell(record.time_in, record.time_out),
+      exportTimeOutCell(record.time_in, record.time_out),
+      record.scan_by ?? "",
+      record.attendance_status,
+      exportPenaltyCell(penalty),
+    ];
+  });
+
+  const total = sumFinalizedPenalties(records.map((record) => assessRecordPenalty(record)));
+  if (records.length > 0) {
+    rows.push([
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      PENALTY_TOTAL_LABEL,
+      total.toFixed(2),
+    ]);
+  }
 
   return buildCsv([...REPORT_HEADERS], rows);
 }
@@ -152,7 +186,9 @@ export type AttendanceSummaryExportRow = {
   late: number;
   lateExcused: number;
   noTimeOut: number;
+  noTimeIn: number;
   absent: number;
+  totalPenaltyPhp: number;
   totalSessions: number;
 };
 
@@ -162,6 +198,7 @@ export const SUMMARY_STATUS_COLUMNS = [
   "Late",
   "Late (Excused)",
   "No Time Out",
+  "No Time In",
   "Absent",
 ] as const;
 
@@ -182,6 +219,7 @@ const SUMMARY_COLUMN_META: Record<
     value: (row) => row.lateExcused,
   },
   "No Time Out": { header: "No Time Out", value: (row) => row.noTimeOut },
+  "No Time In": { header: "No Time In", value: (row) => row.noTimeIn },
   Absent: { header: "Absent", value: (row) => row.absent },
 };
 
@@ -235,7 +273,9 @@ export function buildAttendanceSummaryRows(
         late: 0,
         lateExcused: 0,
         noTimeOut: 0,
+        noTimeIn: 0,
         absent: 0,
+        totalPenaltyPhp: 0,
         totalSessions: 0,
       };
       byStudent.set(key, row);
@@ -246,16 +286,49 @@ export function buildAttendanceSummaryRows(
     if (status === "Present") row.present++;
     else if (status === "Late") row.late++;
     else if (status === "Late (Excused)") row.lateExcused++;
-    else row.absent++;
+    else if (status === "Absent" || status === "Voided") row.absent++;
 
     if (hasNoTimeOut(record.time_in, record.time_out)) {
       row.noTimeOut++;
+    }
+    if (hasNoTimeIn(record.time_in, record.time_out)) {
+      row.noTimeIn++;
+    }
+
+    const penalty = assessRecordPenalty(record);
+    if (penalty.reason !== "pending") {
+      row.totalPenaltyPhp = Math.round((row.totalPenaltyPhp + penalty.amountPhp) * 100) / 100;
     }
   }
 
   return [...byStudent.values()].sort((a, b) =>
     a.student_number.localeCompare(b.student_number)
   );
+}
+
+function recordMatchesSummaryColumn(
+  record: AttendanceReportRow,
+  column: SummaryStatusColumn
+): boolean {
+  const status = record.attendance_status;
+  switch (column) {
+    case "Present":
+      return status === "Present";
+    case "Late":
+      return status === "Late";
+    case "Late (Excused)":
+      return status === "Late (Excused)";
+    case "Absent":
+      return status === "Absent" || status === "Voided";
+    case "No Time Out":
+      return hasNoTimeOut(record.time_in, record.time_out);
+    case "No Time In":
+      return hasNoTimeIn(record.time_in, record.time_out);
+  }
+}
+
+function summaryCountCell(value: number): string | number {
+  return value > 0 ? value : "";
 }
 
 export function buildAttendanceSummaryCsv(
@@ -265,6 +338,9 @@ export function buildAttendanceSummaryCsv(
   const includeTotalSessions =
     options?.includeTotalSessions ?? shouldIncludeTotalSessions(records);
   const summaryColumns = normalizeSummaryStatusColumns(options?.summaryColumns);
+  const matchedRecords = records.filter((record) =>
+    summaryColumns.some((column) => recordMatchesSummaryColumn(record, column))
+  );
 
   const headers = [
     "Student #",
@@ -272,18 +348,47 @@ export function buildAttendanceSummaryCsv(
     "Department",
     "Year Level",
     ...summaryColumns.map((column) => SUMMARY_COLUMN_META[column].header),
+    "Total Penalty (PHP)",
     ...(includeTotalSessions ? ["Total Sessions"] : []),
   ];
 
-  const summaryRows = buildAttendanceSummaryRows(records);
+  const summaryRows = buildAttendanceSummaryRows(matchedRecords).filter((row) =>
+    summaryColumns.some(
+      (column) => SUMMARY_COLUMN_META[column].value(row) > 0
+    )
+  );
   const rows = summaryRows.map((row) => [
     row.student_number,
     row.student_name,
     row.department ?? "",
     row.year_level ?? "",
-    ...summaryColumns.map((column) => SUMMARY_COLUMN_META[column].value(row)),
+    ...summaryColumns.map((column) =>
+      summaryCountCell(SUMMARY_COLUMN_META[column].value(row))
+    ),
+    row.totalPenaltyPhp > 0 ? row.totalPenaltyPhp.toFixed(2) : "",
     ...(includeTotalSessions ? [row.totalSessions] : []),
   ]);
+
+  const includedStudents = new Set(
+    summaryRows.map((row) => row.student_number)
+  );
+  const grandTotal = sumFinalizedPenalties(
+    matchedRecords
+      .filter((record) => includedStudents.has(record.student_number))
+      .map((record) => assessRecordPenalty(record))
+  );
+  if (summaryRows.length > 0) {
+    rows.push([
+      "",
+      "",
+      "",
+      "",
+      ...summaryColumns.map(() => ""),
+      grandTotal > 0 ? grandTotal.toFixed(2) : "",
+      ...(includeTotalSessions ? [""] : []),
+    ]);
+  }
+
   return buildCsv(headers, rows);
 }
 
@@ -304,7 +409,15 @@ const ROSTER_HEADERS = [
   "Time Out (PHT)",
   "Scan By",
   "Status",
+  "Penalty (PHP)",
 ] as const;
+
+export function exportAttendanceReportRows(
+  records: AttendanceReportRow[],
+  filename = "attendance-report-detailed.csv"
+): void {
+  downloadCsv(filename, buildAttendanceReportCsv(records));
+}
 
 function resolveSessionExportMeta(
   sessionTitle: string,
@@ -341,7 +454,8 @@ function resolveSessionExportMeta(
 function sessionRowsToReportRows(
   rows: SessionAttendanceRow[],
   sessionTitle: string,
-  date = ""
+  date = "",
+  sessionPenalties?: PenaltySessionContext | null
 ): AttendanceReportRow[] {
   return rows.map((row) => ({
     id: row.id,
@@ -356,6 +470,8 @@ function sessionRowsToReportRows(
     time_out: row.time_out,
     scan_by: row.scan_by,
     attendance_status: row.attendance_status,
+    person_kind: row.person_kind ?? "student",
+    session_penalties: sessionPenalties ?? undefined,
   }));
 }
 
@@ -371,12 +487,20 @@ export function exportSessionRosterRows(
         filename?: string;
         exportMode?: AttendanceExportMode;
         summaryColumns?: SummaryStatusColumn[];
+        sessionPenalties?: PenaltySessionContext | null;
       }
 ): void {
   const { filename, exportMode } = resolveSessionExportMeta(
     sessionTitle,
     filenameOrMeta
   );
+
+  const sessionPenalties =
+    typeof filenameOrMeta === "string"
+      ? null
+      : filenameOrMeta?.sessionPenalties
+        ? penaltyContextFromSession(filenameOrMeta.sessionPenalties)
+        : null;
 
   if (exportMode === "summary") {
     const date =
@@ -388,23 +512,50 @@ export function exportSessionRosterRows(
     downloadCsv(
       filename,
       buildAttendanceSummaryCsv(
-        sessionRowsToReportRows(rows, sessionTitle, date),
+        sessionRowsToReportRows(rows, sessionTitle, date, sessionPenalties),
         { includeTotalSessions: false, summaryColumns }
       )
     );
     return;
   }
 
-  const csvRows = rows.map((row) => [
-    row.student_number,
-    row.student_name,
-    row.department ?? "",
-    row.year_level ?? "",
-    exportPhDateTime(row.time_in),
-    exportTimeOutCell(row.time_in, row.time_out),
-    row.scan_by ?? "",
-    row.attendance_status,
-  ]);
+  const reportRows = sessionRowsToReportRows(
+    rows,
+    sessionTitle,
+    typeof filenameOrMeta === "string" ? "" : (filenameOrMeta?.date ?? ""),
+    sessionPenalties
+  );
+  const csvRows = reportRows.map((row) => {
+    const penalty = assessRecordPenalty(row);
+    return [
+      row.student_number,
+      row.student_name,
+      row.department ?? "",
+      row.year_level ?? "",
+      exportTimeInCell(row.time_in, row.time_out),
+      exportTimeOutCell(row.time_in, row.time_out),
+      row.scan_by ?? "",
+      row.attendance_status,
+      exportPenaltyCell(penalty),
+    ];
+  });
+
+  const total = sumFinalizedPenalties(
+    reportRows.map((row) => assessRecordPenalty(row))
+  );
+  if (csvRows.length > 0) {
+    csvRows.push([
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      PENALTY_TOTAL_LABEL,
+      total.toFixed(2),
+    ]);
+  }
 
   downloadCsv(filename, buildCsv([...ROSTER_HEADERS], csvRows));
 }

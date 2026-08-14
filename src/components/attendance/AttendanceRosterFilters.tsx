@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   matchesAttendanceStatusFilter,
+  NO_TIME_IN_FILTER,
   NO_TIME_OUT_FILTER,
 } from "@/lib/attendance";
 import { ATTENDANCE_STATUSES, SessionAttendanceRow } from "@/lib/attendeaseTypes";
@@ -37,7 +38,7 @@ export function AttendanceRosterFilters({
           type="search"
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search student name or #..."
+          placeholder="Search student name..."
           className="h-10 w-full rounded border border-border pl-10 pr-3 text-sm outline-none"
         />
       </div>
@@ -66,6 +67,7 @@ export function AttendanceRosterFilters({
             </option>
           ))}
           <option value={NO_TIME_OUT_FILTER}>{NO_TIME_OUT_FILTER}</option>
+          <option value={NO_TIME_IN_FILTER}>{NO_TIME_IN_FILTER}</option>
           <option value="Voided">Voided</option>
         </select>
       )}

@@ -3,6 +3,7 @@ import {
   SESSION_STATUSES,
 } from "@/lib/attendeaseTypes";
 import { DEPARTMENTS, YEAR_LEVELS } from "@/lib/constants";
+import { parsePenaltyFormFields } from "@/lib/penalties";
 import { currentAcademicYear } from "@/lib/validations/student";
 
 export type SessionActionResult =
@@ -28,6 +29,9 @@ export type SessionFormInput = {
   status: AttendanceSessionStatus;
   /** Empty string = standalone. UUID = sub-session under that main. */
   main_session_id: string;
+  penalty_late_php: string;
+  penalty_absent_php: string;
+  penalty_incomplete_php: string;
 };
 
 function isSessionStatus(value: string): value is AttendanceSessionStatus {
@@ -75,6 +79,9 @@ export function parseSessionForm(formData: FormData): SessionFormInput {
     assigned_checker_id: String(formData.get("assigned_checker_id") ?? "").trim(),
     status: isSessionStatus(status) ? status : "Draft",
     main_session_id: String(formData.get("main_session_id") ?? "").trim(),
+    penalty_late_php: String(formData.get("penalty_late_php") ?? ""),
+    penalty_absent_php: String(formData.get("penalty_absent_php") ?? ""),
+    penalty_incomplete_php: String(formData.get("penalty_incomplete_php") ?? ""),
   };
 }
 
@@ -142,13 +149,45 @@ export function validateSessionForm(
   ) {
     return { success: false, error: "Invalid main session selection." };
   }
+  const penalties = parsePenaltyFormFields({
+    late: input.penalty_late_php,
+    absent: input.penalty_absent_php,
+    incomplete: input.penalty_incomplete_php,
+  });
+  if (!penalties.ok) return { success: false, error: penalties.error };
   return null;
+}
+
+export function resolvedSessionPenalties(input: SessionFormInput): {
+  penalty_late_php: number;
+  penalty_absent_php: number;
+  penalty_incomplete_php: number;
+} {
+  const parsed = parsePenaltyFormFields({
+    late: input.penalty_late_php,
+    absent: input.penalty_absent_php,
+    incomplete: input.penalty_incomplete_php,
+  });
+  if (!parsed.ok) {
+    return {
+      penalty_late_php: 0,
+      penalty_absent_php: 0,
+      penalty_incomplete_php: 0,
+    };
+  }
+  return {
+    penalty_late_php: parsed.late,
+    penalty_absent_php: parsed.absent,
+    penalty_incomplete_php: parsed.incomplete,
+  };
 }
 
 export function sessionPayloadFromInput(
   input: SessionFormInput,
-  createdBy?: string | null
+  createdBy?: string | null,
+  penaltiesInherited = false
 ) {
+  const penalties = resolvedSessionPenalties(input);
   return {
     title: input.title,
     description: input.description || null,
@@ -166,6 +205,8 @@ export function sessionPayloadFromInput(
     assigned_checker_id: input.assigned_checker_id || null,
     status: input.status,
     main_session_id: input.main_session_id || null,
+    ...penalties,
+    penalties_inherited: input.main_session_id ? penaltiesInherited : false,
     ...(createdBy ? { created_by: createdBy } : {}),
   };
 }

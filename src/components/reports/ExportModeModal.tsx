@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { SummaryStatusPicker } from "@/components/reports/SummaryStatusPicker";
 import {
-  DEFAULT_SUMMARY_STATUS_COLUMNS,
   type AttendanceExportMode,
   type SummaryStatusColumn,
 } from "@/lib/export-attendance";
@@ -37,19 +36,19 @@ export function ExportModeModal({
   recordCount,
   title = "Export Attendance",
   description = "Choose detailed roster rows or a per-student status summary.",
-  summaryDescription = "One row per student with the status counts you select.",
+  summaryDescription = "One row per student with the status counts you select. Only students who have those statuses are included.",
 }: ExportModeModalProps) {
   const [exportMode, setExportMode] =
     useState<AttendanceExportMode>("detailed");
   const [summaryColumns, setSummaryColumns] = useState<SummaryStatusColumn[]>(
-    [...DEFAULT_SUMMARY_STATUS_COLUMNS]
+    []
   );
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (open) {
       setExportMode("detailed");
-      setSummaryColumns([...DEFAULT_SUMMARY_STATUS_COLUMNS]);
+      setSummaryColumns([]);
       setExporting(false);
     }
   }, [open]);

@@ -2,6 +2,10 @@ import { SessionWithStats } from "@/lib/attendeaseTypes";
 import { emptyLogCounts } from "@/lib/data/session-stats";
 import { getScopedSessionCounts } from "@/lib/data/session-attendance";
 import { getCheckerNameMap } from "@/lib/data/session-helpers";
+import {
+  coercePenaltyPhp,
+  resolveIncompletePenaltyPhp,
+} from "@/lib/penalties";
 import { createClient } from "@/lib/supabase/server";
 
 const DEFAULT_SESSION_LIMIT = 200;
@@ -69,6 +73,12 @@ export async function getSessions(
       checker_name: session.assigned_checker_id
         ? (checkerMap.get(session.assigned_checker_id) ?? null)
         : null,
+      penalty_late_php: coercePenaltyPhp(session.penalty_late_php),
+      penalty_absent_php: coercePenaltyPhp(session.penalty_absent_php),
+      penalty_incomplete_php: resolveIncompletePenaltyPhp(
+        session.penalty_absent_php,
+        session.penalty_incomplete_php
+      ),
       present_count: counts.present,
       late_count: counts.late,
       late_excused_count: counts.lateExcused,
