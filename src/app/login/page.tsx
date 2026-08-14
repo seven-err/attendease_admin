@@ -1,16 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { PORTAL_ROLES } from "@/lib/constants";
-import { isPortalRole } from "@/lib/permissions";
-import { createClient } from "@/lib/supabase/client";
+import { login } from "@/app/login/actions";
 import { ArrowRight, Eye, EyeOff, GraduationCap, Lock, Mail } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,64 +20,18 @@ export default function LoginPage() {
     }
   }, []);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    const supabase = createClient();
+    const formData = new FormData(e.currentTarget);
+    const result = await login(formData);
 
-    const { data: authData, error: authError } =
-      await supabase.auth.signInWithPassword({ email, password });
-
-    if (authError) {
-      setError(authError.message);
+    if (!result.success) {
+      setError(result.error);
       setLoading(false);
-      return;
     }
-
-    const userId = authData.user?.id;
-    if (!userId) {
-      setError("Login failed. Please try again.");
-      setLoading(false);
-      return;
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from("users")
-      .select("role, status, department")
-      .eq("id", userId)
-      .in("role", [...PORTAL_ROLES])
-      .maybeSingle();
-
-    if (profileError || !profile) {
-      await supabase.auth.signOut();
-      setError("Unable to load your profile. Contact an administrator.");
-      setLoading(false);
-      return;
-    }
-
-    if (!isPortalRole(profile.role) || profile.status !== "active") {
-      await supabase.auth.signOut();
-      setError("Access denied. Admin credentials required.");
-      setLoading(false);
-      return;
-    }
-
-    if (
-      profile.role === "department_admin" &&
-      !profile.department?.trim()
-    ) {
-      await supabase.auth.signOut();
-      setError(
-        "Your department admin account is missing a department assignment."
-      );
-      setLoading(false);
-      return;
-    }
-
-    router.push("/dashboard");
-    router.refresh();
   }
 
   return (
@@ -126,6 +76,7 @@ export default function LoginPage() {
               />
               <input
                 id="email"
+                name="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -148,6 +99,7 @@ export default function LoginPage() {
               />
               <input
                 id="password"
+                name="password"
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

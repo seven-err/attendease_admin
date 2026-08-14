@@ -23,6 +23,11 @@ import {
   type StaffImportRow,
 } from "@/lib/validations/staff-import";
 import { DEPARTMENTS, STAFF_ORG_UNITS } from "@/lib/constants";
+import {
+  getExistingStudentNumbers,
+  isStudentNumberConflictMessage,
+  resolveStudentNumber,
+} from "@/lib/student-numbers";
 
 function newQrToken(): string {
   return randomBytes(32).toString("hex");
@@ -82,50 +87,6 @@ async function enforceDepartmentScope(
   return null;
 }
 
-async function isStudentNumberTaken(
-  studentNumber: string,
-  excludeId?: string
-): Promise<boolean> {
-  const supabase = await createClient();
-  let studentQuery = supabase
-    .from("students")
-    .select("id")
-    .eq("student_number", studentNumber);
-
-  if (excludeId) {
-    studentQuery = studentQuery.neq("id", excludeId);
-  }
-
-  const { data: studentMatch } = await studentQuery.maybeSingle();
-  if (studentMatch) return true;
-
-  let peopleQuery = supabase
-    .from("people")
-    .select("id")
-    .eq("person_number", studentNumber)
-    .eq("person_kind", "student");
-
-  if (excludeId) {
-    peopleQuery = peopleQuery.neq("id", excludeId);
-  }
-
-  const { data: peopleMatch } = await peopleQuery.maybeSingle();
-  if (!peopleMatch) return false;
-
-  // Orphan people rows (no linked student) are reusable by the DB trigger.
-  let linkedStudentQuery = supabase
-    .from("students")
-    .select("id")
-    .eq("id", peopleMatch.id);
-
-  if (excludeId) {
-    linkedStudentQuery = linkedStudentQuery.neq("id", excludeId);
-  }
-
-  const { data: linkedStudent } = await linkedStudentQuery.maybeSingle();
-  return Boolean(linkedStudent);
-}
-
 async function isPersonNumberTaken(
   personNumber: string,
   excludeId?: string
@@ -142,37 +103,6 @@ async function isPersonNumberTaken(
 
   const { data } = await query.maybeSingle();
   return Boolean(data);
-}
-
-function nextStudentNumber(
-  academicYear: string,
-  existingNumbers: string[],
-  reservedNumbers: Set<string>
-): string {
-  const yearPrefix = academicYear.split("-")[0] || String(new Date().getFullYear());
-  const pattern = new RegExp(`^${yearPrefix}-(\\d+)$`);
-  let max = 0;
-
-  for (const number of [...existingNumbers, ...reservedNumbers]) {
-    const match = pattern.exec(number);
-    if (!match) continue;
-    max = Math.max(max, Number(match[1]));
-  }
-
-  return `${yearPrefix}-${String(max + 1).padStart(4, "0")}`;
-}
-
-async function getExistingStudentNumbers(academicYear: string): Promise<string[]> {
-  const yearPrefix = academicYear.split("-")[0] || String(new Date().getFullYear());
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("students")
-    .select("student_number")
-    .like("student_number", `${yearPrefix}-%`);
-
-  return (data ?? [])
-    .map((row) => row.student_number)
-    .filter((value): value is string => Boolean(value));
 }
 
 function nextEmployeeNumber(
@@ -540,26 +470,37 @@ export async function createStudent(
   if (scopeError) return { success: false, error: scopeError };
 
   const academicYear = input.academic_year || currentAcademicYear();
-  // Student IDs are always auto-formatted as YYYY-0000.
-  input.student_number = nextStudentNumber(
-    academicYear,
-    await getExistingStudentNumbers(academicYear),
-    new Set<string>()
-  );
+  const existingNumbers = await getExistingStudentNumbers(academicYear);
+  const reservedNumbers = new Set<string>();
 
-  if (await isStudentNumberTaken(input.student_number)) {
-    return { success: false, error: "Student number already exists." };
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    input.student_number = await resolveStudentNumber(
+      academicYear,
+      existingNumbers,
+      reservedNumbers,
+      input.student_number
+    );
+
+    const result = await insertStudentRecord(input);
+    if (result.success) {
+      revalidatePath("/students");
+      revalidatePath("/dashboard");
+      revalidateTag("dashboard-stats", "max");
+      return { success: true };
+    }
+
+    if (!isStudentNumberConflictMessage(result.error)) {
+      return result;
+    }
+
+    reservedNumbers.add(input.student_number);
+    if (!existingNumbers.includes(input.student_number)) {
+      existingNumbers.push(input.student_number);
+    }
+    input.student_number = "";
   }
 
-  const result = await insertStudentRecord(input);
-  if (!result.success) {
-    return result;
-  }
-
-  revalidatePath("/students");
-  revalidatePath("/dashboard");
-  revalidateTag("dashboard-stats", "max");
-  return { success: true };
+  return { success: false, error: "Unable to allocate a unique student number." };
 }
 
 export async function updateStudent(
@@ -682,106 +623,154 @@ export async function archiveStudent(
 export async function importStudentsFromCsv(
   csvText: string
 ): Promise<StudentImportResult> {
-  const profile = await getPortalProfile();
-  if (
-    !profile ||
-    (!can(profile, "bulk_import.execute") && !can(profile, "people.create"))
-  ) {
-    return {
-      success: false,
-      error: "You don't have permission to import people.",
-    };
-  }
+  try {
+    const profile = await getPortalProfile();
+    if (
+      !profile ||
+      (!can(profile, "bulk_import.execute") && !can(profile, "people.create"))
+    ) {
+      return {
+        success: false,
+        error: "You don't have permission to import people.",
+      };
+    }
 
-  const scope = scopedDepartment(profile);
-  const preview = parseStudentImportCsv(csvText);
-  if (preview.rows.length === 0) {
+    const scope = scopedDepartment(profile);
+    const preview = parseStudentImportCsv(csvText);
+    if (preview.rows.length === 0) {
+      return {
+        success: false,
+        error:
+          preview.errors[0]?.message ?? "No valid student rows found in CSV.",
+      };
+    }
+
+    let imported = 0;
+    let skipped = 0;
+    const errors = [...preview.errors];
+    const reservedStudentNumbers = new Set<string>();
+    const existingStudentNumbers = new Map<string, string[]>();
+
+    for (const row of preview.rows) {
+      if (scope && row.department !== scope) {
+        skipped += 1;
+        errors.push({
+          row: row.rowNumber,
+          message: `Department ${row.department} is outside your scope (${scope}).`,
+        });
+        continue;
+      }
+
+      const academicYear = row.academic_year || currentAcademicYear();
+      if (!existingStudentNumbers.has(academicYear)) {
+        existingStudentNumbers.set(
+          academicYear,
+          await getExistingStudentNumbers(academicYear)
+        );
+      }
+
+      const preferredNumber = row.student_number;
+      let studentNumber = await resolveStudentNumber(
+        academicYear,
+        existingStudentNumbers.get(academicYear) ?? [],
+        reservedStudentNumbers,
+        row.student_number
+      );
+
+      if (preferredNumber && preferredNumber !== studentNumber) {
+        errors.push({
+          row: row.rowNumber,
+          message: `Student number ${preferredNumber} was already taken; assigned ${studentNumber} instead.`,
+        });
+      }
+
+      let result = await insertStudentRecord({
+        student_number: studentNumber,
+        full_name: row.full_name,
+        student_status: row.student_status,
+        department: row.department,
+        course: row.course,
+        year_level: row.year_level,
+        academic_year: row.academic_year,
+      });
+
+      for (let attempt = 0; attempt < 100 && !result.success; attempt += 1) {
+        if (!isStudentNumberConflictMessage(result.error)) {
+          break;
+        }
+
+        const conflictNumber = studentNumber;
+        reservedStudentNumbers.add(conflictNumber);
+        const yearNumbers = existingStudentNumbers.get(academicYear) ?? [];
+        if (!yearNumbers.includes(conflictNumber)) {
+          yearNumbers.push(conflictNumber);
+          existingStudentNumbers.set(academicYear, yearNumbers);
+        }
+
+        studentNumber = await resolveStudentNumber(
+          academicYear,
+          yearNumbers,
+          reservedStudentNumbers
+        );
+
+        errors.push({
+          row: row.rowNumber,
+          message: `Student number ${conflictNumber} was already taken; retrying with ${studentNumber}.`,
+        });
+
+        result = await insertStudentRecord({
+          student_number: studentNumber,
+          full_name: row.full_name,
+          student_status: row.student_status,
+          department: row.department,
+          course: row.course,
+          year_level: row.year_level,
+          academic_year: row.academic_year,
+        });
+      }
+
+      row.student_number = studentNumber;
+
+      if (!result.success) {
+        skipped += 1;
+        errors.push({
+          row: row.rowNumber,
+          message: result.error,
+        });
+        continue;
+      }
+
+      imported += 1;
+      reservedStudentNumbers.add(studentNumber);
+    }
+
+    if (imported === 0) {
+      return {
+        success: false,
+        error: summarizeImportFailure("students", errors),
+      };
+    }
+
+    revalidatePath("/students");
+    revalidatePath("/dashboard");
+    revalidateTag("dashboard-stats", "max");
+
+    return {
+      success: true,
+      imported,
+      skipped,
+      errors,
+    };
+  } catch (error) {
+    console.error("importStudentsFromCsv failed:", error);
     return {
       success: false,
       error:
-        preview.errors[0]?.message ?? "No valid student rows found in CSV.",
+        error instanceof Error
+          ? error.message
+          : "Student import failed due to a server error.",
     };
   }
-
-  let imported = 0;
-  let skipped = 0;
-  const errors = [...preview.errors];
-  const reservedStudentNumbers = new Set<string>();
-  const existingStudentNumbers = new Map<string, string[]>();
-
-  for (const row of preview.rows) {
-    if (scope && row.department !== scope) {
-      skipped += 1;
-      errors.push({
-        row: row.rowNumber,
-        message: `Department ${row.department} is outside your scope (${scope}).`,
-      });
-      continue;
-    }
-
-    // Student IDs are always auto-formatted as YYYY-0000 on import.
-    const academicYear = row.academic_year || currentAcademicYear();
-    if (!existingStudentNumbers.has(academicYear)) {
-      existingStudentNumbers.set(
-        academicYear,
-        await getExistingStudentNumbers(academicYear)
-      );
-    }
-    row.student_number = nextStudentNumber(
-      academicYear,
-      existingStudentNumbers.get(academicYear) ?? [],
-      reservedStudentNumbers
-    );
-
-    if (await isStudentNumberTaken(row.student_number)) {
-      skipped += 1;
-      errors.push({
-        row: row.rowNumber,
-        message: `Student number ${row.student_number} already exists.`,
-      });
-      continue;
-    }
-
-    const result = await insertStudentRecord({
-      student_number: row.student_number,
-      full_name: row.full_name,
-      student_status: row.student_status,
-      department: row.department,
-      course: row.course,
-      year_level: row.year_level,
-      academic_year: row.academic_year,
-    });
-
-    if (!result.success) {
-      skipped += 1;
-      errors.push({
-        row: row.rowNumber,
-        message: result.error,
-      });
-      continue;
-    }
-
-    imported += 1;
-    reservedStudentNumbers.add(row.student_number);
-  }
-
-  if (imported === 0) {
-    return {
-      success: false,
-      error: summarizeImportFailure("students", errors),
-    };
-  }
-
-  revalidatePath("/students");
-  revalidatePath("/dashboard");
-  revalidateTag("dashboard-stats", "max");
-
-  return {
-    success: true,
-    imported,
-    skipped,
-    errors,
-  };
 }
 
 export async function importStaffFromCsv(

@@ -43,9 +43,17 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user: Awaited<
+    ReturnType<typeof supabase.auth.getUser>
+  >["data"]["user"] = null;
+
+  try {
+    ({
+      data: { user },
+    } = await supabase.auth.getUser());
+  } catch {
+    // Supabase unreachable — treat as signed out so pages still load.
+  }
 
   const pathname = request.nextUrl.pathname;
 

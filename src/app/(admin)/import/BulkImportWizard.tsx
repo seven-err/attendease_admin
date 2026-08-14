@@ -328,7 +328,7 @@ export function BulkImportWizard({
                       <td className="px-3 py-2 font-mono">{row.rowNumber}</td>
                       <td className="px-3 py-2 font-mono">
                         {"student_number" in row
-                          ? row.student_number
+                          ? row.student_number || "Auto-assigned"
                           : `EMP-${row.department}-...`}
                       </td>
                       <td className="px-3 py-2 font-bold">{row.full_name}</td>
