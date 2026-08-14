@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 
-const STUDENT_NUMBER_PAGE_SIZE = 1000;
+export const STUDENT_NUMBERS_NETWORK_ERROR =
+  "Unable to reach the database. Check your connection and try again.";
 
 export function studentNumberYearPrefix(academicYear: string): string {
   return academicYear.split("-")[0] || String(new Date().getFullYear());
@@ -32,6 +33,34 @@ export function nextStudentNumber(
   return `${yearPrefix}-${String(max + 1).padStart(4, "0")}`;
 }
 
+function isFetchFailure(message: string | undefined): boolean {
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("fetch failed") ||
+    normalized.includes("network") ||
+    normalized.includes("timeout") ||
+    normalized.includes("econnrefused") ||
+    normalized.includes("enotfound")
+  );
+}
+
+function raiseQueryError(message: string | undefined, context: string): never {
+  if (isFetchFailure(message)) {
+    throw new Error(STUDENT_NUMBERS_NETWORK_ERROR);
+  }
+  throw new Error(message ?? `Failed to load ${context}.`);
+}
+
+function highestSuffixFromNumber(
+  value: string | null | undefined,
+  yearPrefix: string
+): number {
+  if (!value) return 0;
+  const match = new RegExp(`^${yearPrefix}-(\\d+)$`).exec(value);
+  return match ? Number(match[1]) : 0;
+}
+
 export async function isStudentNumberTaken(
   studentNumber: string,
   excludeId?: string
@@ -46,7 +75,11 @@ export async function isStudentNumberTaken(
     studentQuery = studentQuery.neq("id", excludeId);
   }
 
-  const { data: studentMatch } = await studentQuery.maybeSingle();
+  const { data: studentMatch, error: studentError } =
+    await studentQuery.maybeSingle();
+  if (studentError) {
+    raiseQueryError(studentError.message, "student number availability");
+  }
   if (studentMatch) return true;
 
   let peopleQuery = supabase
@@ -59,7 +92,11 @@ export async function isStudentNumberTaken(
     peopleQuery = peopleQuery.neq("id", excludeId);
   }
 
-  const { data: peopleMatch } = await peopleQuery.maybeSingle();
+  const { data: peopleMatch, error: peopleError } =
+    await peopleQuery.maybeSingle();
+  if (peopleError) {
+    raiseQueryError(peopleError.message, "student number availability");
+  }
   if (!peopleMatch) return false;
 
   // Orphan people rows (no linked student) are reusable by the DB trigger.
@@ -72,7 +109,11 @@ export async function isStudentNumberTaken(
     linkedStudentQuery = linkedStudentQuery.neq("id", excludeId);
   }
 
-  const { data: linkedStudent } = await linkedStudentQuery.maybeSingle();
+  const { data: linkedStudent, error: linkedError } =
+    await linkedStudentQuery.maybeSingle();
+  if (linkedError) {
+    raiseQueryError(linkedError.message, "student number availability");
+  }
   return Boolean(linkedStudent);
 }
 
@@ -88,63 +129,49 @@ function isStudentNumberConflictMessage(message: string | undefined): boolean {
 
 export { isStudentNumberConflictMessage };
 
-async function fetchPaginatedColumnValues(
-  table: "students" | "people",
-  column: "student_number" | "person_number",
-  pattern: string,
-  filters?: { person_kind?: string }
-): Promise<string[]> {
-  const supabase = await createClient();
-  const values: string[] = [];
-  let from = 0;
-
-  while (true) {
-    let query = supabase
-      .from(table)
-      .select(column)
-      .like(column, pattern)
-      .order(column, { ascending: true })
-      .range(from, from + STUDENT_NUMBER_PAGE_SIZE - 1);
-
-    if (filters?.person_kind) {
-      query = query.eq("person_kind", filters.person_kind);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      throw new Error(error.message ?? `Failed to load ${column} values.`);
-    }
-
-    const pageValues = (data ?? [])
-      .map((row) => (row as Record<string, string | null>)[column])
-      .filter((value): value is string => Boolean(value));
-
-    values.push(...pageValues);
-
-    if (pageValues.length < STUDENT_NUMBER_PAGE_SIZE) {
-      break;
-    }
-
-    from += STUDENT_NUMBER_PAGE_SIZE;
-  }
-
-  return values;
-}
-
+/** Highest assigned number for the academic year — enough for nextStudentNumber(). */
 export async function getExistingStudentNumbers(
   academicYear: string
 ): Promise<string[]> {
   const yearPrefix = studentNumberYearPrefix(academicYear);
   const pattern = `${yearPrefix}-%`;
+  const supabase = await createClient();
 
-  const [studentNumbers, peopleNumbers] = await Promise.all([
-    fetchPaginatedColumnValues("students", "student_number", pattern),
-    fetchPaginatedColumnValues("people", "person_number", pattern, {
-      person_kind: "student",
-    }),
+  const [studentsResult, peopleResult] = await Promise.all([
+    supabase
+      .from("students")
+      .select("student_number")
+      .like("student_number", pattern)
+      .order("student_number", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("people")
+      .select("person_number")
+      .like("person_number", pattern)
+      .eq("person_kind", "student")
+      .order("person_number", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
-  return [...new Set([...studentNumbers, ...peopleNumbers])];
+  if (studentsResult.error) {
+    raiseQueryError(studentsResult.error.message, "student numbers");
+  }
+  if (peopleResult.error) {
+    raiseQueryError(peopleResult.error.message, "student numbers");
+  }
+
+  const maxSuffix = Math.max(
+    highestSuffixFromNumber(studentsResult.data?.student_number, yearPrefix),
+    highestSuffixFromNumber(peopleResult.data?.person_number, yearPrefix)
+  );
+
+  if (maxSuffix === 0) {
+    return [];
+  }
+
+  return [`${yearPrefix}-${String(maxSuffix).padStart(4, "0")}`];
 }
 
 export async function resolveStudentNumber(

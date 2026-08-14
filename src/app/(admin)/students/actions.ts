@@ -27,6 +27,7 @@ import {
   getExistingStudentNumbers,
   isStudentNumberConflictMessage,
   resolveStudentNumber,
+  STUDENT_NUMBERS_NETWORK_ERROR,
 } from "@/lib/student-numbers";
 
 function newQrToken(): string {
@@ -470,37 +471,56 @@ export async function createStudent(
   if (scopeError) return { success: false, error: scopeError };
 
   const academicYear = input.academic_year || currentAcademicYear();
-  const existingNumbers = await getExistingStudentNumbers(academicYear);
-  const reservedNumbers = new Set<string>();
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    input.student_number = await resolveStudentNumber(
-      academicYear,
-      existingNumbers,
-      reservedNumbers,
-      input.student_number
-    );
+  try {
+    const existingNumbers = await getExistingStudentNumbers(academicYear);
+    const reservedNumbers = new Set<string>();
 
-    const result = await insertStudentRecord(input);
-    if (result.success) {
-      revalidatePath("/students");
-      revalidatePath("/dashboard");
-      revalidateTag("dashboard-stats", "max");
-      return { success: true };
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      input.student_number = await resolveStudentNumber(
+        academicYear,
+        existingNumbers,
+        reservedNumbers,
+        input.student_number
+      );
+
+      const result = await insertStudentRecord(input);
+      if (result.success) {
+        revalidatePath("/students");
+        revalidatePath("/dashboard");
+        revalidateTag("dashboard-stats", "max");
+        return { success: true };
+      }
+
+      if (!isStudentNumberConflictMessage(result.error)) {
+        return result;
+      }
+
+      reservedNumbers.add(input.student_number);
+      if (!existingNumbers.includes(input.student_number)) {
+        existingNumbers.push(input.student_number);
+      }
+      input.student_number = "";
     }
 
-    if (!isStudentNumberConflictMessage(result.error)) {
-      return result;
-    }
-
-    reservedNumbers.add(input.student_number);
-    if (!existingNumbers.includes(input.student_number)) {
-      existingNumbers.push(input.student_number);
-    }
-    input.student_number = "";
+    return {
+      success: false,
+      error: "Unable to allocate a unique student number.",
+    };
+  } catch (error) {
+    console.error("createStudent failed:", error);
+    return {
+      success: false,
+      error:
+        error instanceof Error &&
+        (error.message === STUDENT_NUMBERS_NETWORK_ERROR ||
+          error.message.toLowerCase().includes("fetch failed"))
+          ? STUDENT_NUMBERS_NETWORK_ERROR
+          : error instanceof Error
+            ? error.message
+            : "Failed to create student.",
+    };
   }
-
-  return { success: false, error: "Unable to allocate a unique student number." };
 }
 
 export async function updateStudent(

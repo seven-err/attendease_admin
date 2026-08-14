@@ -1,12 +1,21 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { login } from "@/app/login/actions";
 import { ArrowRight, Eye, EyeOff, GraduationCap, Lock, Mail } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
+function safeReturnPath(next: string | null): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//")) {
+    return "/dashboard";
+  }
+  return next;
+}
+
 export default function LoginPage() {
+  const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -31,7 +40,12 @@ export default function LoginPage() {
     if (!result.success) {
       setError(result.error);
       setLoading(false);
+      return;
     }
+
+    const next = new URLSearchParams(window.location.search).get("next");
+    router.push(safeReturnPath(next));
+    router.refresh();
   }
 
   return (

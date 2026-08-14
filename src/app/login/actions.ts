@@ -1,6 +1,5 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { PORTAL_ROLES } from "@/lib/constants";
 import { isPortalRole } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/server";
@@ -86,5 +85,5 @@ export async function login(formData: FormData): Promise<LoginResult> {
     };
   }
 
-  redirect("/dashboard");
+  return { success: true };
 }

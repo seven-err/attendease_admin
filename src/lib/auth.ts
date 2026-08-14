@@ -70,29 +70,34 @@ async function loadDepartmentAdminPermissions(
 /** Active portal user (super admin or department admin). Request-memoized. */
 export const getPortalProfile = cache(
   async (): Promise<PortalProfile | null> => {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    try {
+      const supabase = await createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-    if (!user) return null;
+      if (!user) return null;
 
-    const { data, error } = await supabase
-      .from("users")
-      .select("id, full_name, email, role, status, department")
-      .eq("id", user.id)
-      .in("role", [...PORTAL_ROLES])
-      .eq("status", "active")
-      .maybeSingle();
+      const { data, error } = await supabase
+        .from("users")
+        .select("id, full_name, email, role, status, department")
+        .eq("id", user.id)
+        .in("role", [...PORTAL_ROLES])
+        .eq("status", "active")
+        .maybeSingle();
 
-    if (error || !data) return null;
+      if (error || !data) return null;
 
-    const permissions =
-      data.role === DEPARTMENT_ADMIN_ROLE
-        ? await loadDepartmentAdminPermissions(data.id)
-        : permissionsFor(ADMIN_ROLE);
+      const permissions =
+        data.role === DEPARTMENT_ADMIN_ROLE
+          ? await loadDepartmentAdminPermissions(data.id)
+          : permissionsFor(ADMIN_ROLE);
 
-    return mapPortalProfile(data, user.email ?? "", permissions);
+      return mapPortalProfile(data, user.email ?? "", permissions);
+    } catch {
+      // Supabase unreachable — treat as signed out so pages can redirect cleanly.
+      return null;
+    }
   }
 );
 
