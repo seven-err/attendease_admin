@@ -1,5 +1,6 @@
 "use server";
 
+import { randomBytes } from "crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { getPortalProfile } from "@/lib/auth";
 import { can, scopedDepartment } from "@/lib/permissions";
@@ -22,6 +23,24 @@ import {
   type StaffImportRow,
 } from "@/lib/validations/staff-import";
 import { DEPARTMENTS, STAFF_ORG_UNITS } from "@/lib/constants";
+
+function newQrToken(): string {
+  return randomBytes(32).toString("hex");
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function summarizeImportFailure(
+  entity: "students" | "employees",
+  errors: { row: number; message: string }[]
+): string {
+  const first = errors.find((item) => item.message)?.message;
+  return first
+    ? `No ${entity} were imported. ${first}`
+    : `No ${entity} were imported. Review the errors and try again.`;
+}
 
 type StaffActionResult = StudentActionResult;
 
@@ -68,17 +87,43 @@ async function isStudentNumberTaken(
   excludeId?: string
 ): Promise<boolean> {
   const supabase = await createClient();
-  let query = supabase
+  let studentQuery = supabase
     .from("students")
     .select("id")
     .eq("student_number", studentNumber);
 
   if (excludeId) {
-    query = query.neq("id", excludeId);
+    studentQuery = studentQuery.neq("id", excludeId);
   }
 
-  const { data } = await query.maybeSingle();
-  return Boolean(data);
+  const { data: studentMatch } = await studentQuery.maybeSingle();
+  if (studentMatch) return true;
+
+  let peopleQuery = supabase
+    .from("people")
+    .select("id")
+    .eq("person_number", studentNumber)
+    .eq("person_kind", "student");
+
+  if (excludeId) {
+    peopleQuery = peopleQuery.neq("id", excludeId);
+  }
+
+  const { data: peopleMatch } = await peopleQuery.maybeSingle();
+  if (!peopleMatch) return false;
+
+  // Orphan people rows (no linked student) are reusable by the DB trigger.
+  let linkedStudentQuery = supabase
+    .from("students")
+    .select("id")
+    .eq("id", peopleMatch.id);
+
+  if (excludeId) {
+    linkedStudentQuery = linkedStudentQuery.neq("id", excludeId);
+  }
+
+  const { data: linkedStudent } = await linkedStudentQuery.maybeSingle();
+  return Boolean(linkedStudent);
 }
 
 async function isPersonNumberTaken(
@@ -185,6 +230,7 @@ async function insertStudentRecord(
       student_number: input.student_number,
       full_name: input.full_name,
       student_status: input.student_status,
+      qr_token: newQrToken(),
     })
     .select("id")
     .single();
@@ -205,10 +251,13 @@ async function insertStudentRecord(
       year_level: input.year_level,
       academic_year: academicYear,
       status: input.student_status,
+      created_at: nowIso(),
+      updated_at: nowIso(),
     });
 
   if (academicError) {
     await supabase.from("students").delete().eq("id", student.id);
+    await supabase.from("people").delete().eq("id", student.id);
     return {
       success: false,
       error: academicError.message ?? "Failed to save academic record.",
@@ -231,6 +280,7 @@ async function insertStaffRecord(
       full_name: row.full_name,
       person_kind: "staff",
       person_status: row.person_status,
+      qr_token: newQrToken(),
     })
     .select("id")
     .single();
@@ -576,6 +626,8 @@ export async function updateStudent(
       .insert({
         student_id: studentId,
         ...academicPayload,
+        created_at: nowIso(),
+        updated_at: nowIso(),
       });
 
     if (academicError) {
@@ -716,7 +768,7 @@ export async function importStudentsFromCsv(
   if (imported === 0) {
     return {
       success: false,
-      error: "No students were imported. Review the errors and try again.",
+      error: summarizeImportFailure("students", errors),
     };
   }
 
@@ -806,7 +858,7 @@ export async function importStaffFromCsv(
   if (imported === 0) {
     return {
       success: false,
-      error: "No employees were imported. Review the errors and try again.",
+      error: summarizeImportFailure("employees", errors),
     };
   }
 

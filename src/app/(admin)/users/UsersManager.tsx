@@ -53,6 +53,8 @@ export function UsersManager({
   const [mode, setMode] = useState<"create" | "edit" | null>(null);
   const [step, setStep] = useState<WizardStep>("details");
   const [selected, setSelected] = useState<PortalUserRow | null>(null);
+  const [resetPasswordUser, setResetPasswordUser] =
+    useState<PortalUserRow | null>(null);
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -204,17 +206,26 @@ export function UsersManager({
   }
 
   function handleReset(user: PortalUserRow) {
-    const confirmed = window.confirm(
-      `Reset password for ${user.full_name} (${user.email})?\n\nA temporary password will be shown once. Share it securely with the user.`
-    );
-    if (!confirmed) return;
+    setError(null);
+    setSuccess(null);
+    setResetPasswordUser(user);
+  }
 
+  function closeResetPasswordDialog() {
+    if (isPending) return;
+    setResetPasswordUser(null);
+  }
+
+  function executeResetPassword() {
+    if (!resetPasswordUser) return;
+    const user = resetPasswordUser;
     setError(null);
     setSuccess(null);
     startTransition(async () => {
       const result = await resetPortalUserPassword(user.id);
       if (!result.success) {
         setError(result.error);
+        setResetPasswordUser(null);
         return;
       }
       setSuccess(
@@ -222,6 +233,7 @@ export function UsersManager({
           ? `Password reset. Temporary password: ${result.tempPassword}`
           : "Password reset."
       );
+      setResetPasswordUser(null);
     });
   }
 
@@ -547,6 +559,48 @@ export function UsersManager({
             )}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={resetPasswordUser !== null}
+        onClose={closeResetPasswordDialog}
+        title="Reset password?"
+        overlayClassName="z-[60] items-center"
+        panelClassName="max-w-md"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={isPending}
+              onClick={closeResetPasswordDialog}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={isPending}
+              onClick={executeResetPassword}
+            >
+              {isPending ? "Resetting..." : "Yes, reset password"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-2 text-sm text-text-secondary">
+          <p>
+            Reset password for{" "}
+            <span className="font-bold text-foreground">
+              {resetPasswordUser?.full_name}
+            </span>{" "}
+            ({resetPasswordUser?.email})?
+          </p>
+          <p>
+            A temporary password will be shown once. Share it securely with the
+            user.
+          </p>
+        </div>
       </Modal>
     </div>
   );

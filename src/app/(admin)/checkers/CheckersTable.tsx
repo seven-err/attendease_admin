@@ -51,6 +51,7 @@ type CheckersTableProps = {
 
 type ConfirmDialog =
   | { kind: "delete"; checker: CheckerRow }
+  | { kind: "reset_password"; checker: CheckerRow }
   | { kind: "reset_all_pins"; checker: CheckerRow }
   | { kind: "reset_profile_pin"; profile: CheckerProfileRow }
   | {
@@ -182,20 +183,8 @@ export function CheckersTable({
     setUndoPinProfileName(null);
   }
 
-  function handleResetPassword(checkerId: string) {
-    setError(null);
-    startTransition(async () => {
-      const result = await resetCheckerPassword(checkerId);
-      if (!result.success) {
-        setError(result.error);
-        return;
-      }
-      setSuccess(
-        result.tempPassword
-          ? `Password reset. Temporary password: ${result.tempPassword}`
-          : "Password reset."
-      );
-    });
+  function handleResetPassword(checker: CheckerRow) {
+    setConfirmDialog({ kind: "reset_password", checker });
   }
 
   function handleResetPins(checker: CheckerRow) {
@@ -246,6 +235,22 @@ export function CheckersTable({
         setConfirmDialog(null);
         router.refresh();
         closeModal();
+        return;
+      }
+
+      if (dialog.kind === "reset_password") {
+        const result = await resetCheckerPassword(dialog.checker.id);
+        if (!result.success) {
+          setError(result.error);
+          setConfirmDialog(null);
+          return;
+        }
+        setSuccess(
+          result.tempPassword
+            ? `Password reset. Temporary password: ${result.tempPassword}`
+            : "Password reset."
+        );
+        setConfirmDialog(null);
         return;
       }
 
@@ -382,6 +387,27 @@ export function CheckersTable({
               ({confirmDialog.checker.email})? This removes their login and
               checker profiles. Attendance history is kept.
             </p>
+          ),
+        };
+      case "reset_password":
+        return {
+          title: "Reset password?",
+          confirmLabel: isPending ? "Resetting..." : "Yes, reset password",
+          danger: false,
+          body: (
+            <div className="space-y-2 text-sm text-text-secondary">
+              <p>
+                Reset password for{" "}
+                <span className="font-bold text-foreground">
+                  {confirmDialog.checker.full_name}
+                </span>{" "}
+                ({confirmDialog.checker.email})?
+              </p>
+              <p>
+                A temporary password will be shown once. Share it securely with
+                the checker.
+              </p>
+            </div>
           ),
         };
       case "reset_all_pins": {
@@ -682,7 +708,7 @@ export function CheckersTable({
                         {canManage && (
                           <button
                             type="button"
-                            onClick={() => handleResetPassword(checker.id)}
+                            onClick={() => handleResetPassword(checker)}
                             disabled={isPending}
                             className="rounded p-1 hover:bg-gray-100 disabled:opacity-60"
                             aria-label={`Reset password for ${checker.full_name}`}
@@ -855,7 +881,7 @@ export function CheckersTable({
             {canManage && (
               <button
                 type="button"
-                onClick={() => handleResetPassword(selectedChecker!.id)}
+                onClick={() => handleResetPassword(selectedChecker!)}
                 disabled={isPending}
                 className="flex items-center gap-2 rounded border border-border px-3 py-2 text-sm font-bold disabled:opacity-60"
               >

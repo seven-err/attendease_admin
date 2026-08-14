@@ -121,11 +121,18 @@ export function BulkImportWizard({
     setError(null);
     setStep("import");
     startTransition(async () => {
-      const importResult = await executeBulkImport(csvText, importKind);
-      setResult(importResult);
-      setStep("summary");
-      if (importResult.success) {
-        router.refresh();
+      try {
+        const importResult = await executeBulkImport(csvText, importKind);
+        setResult(importResult);
+        setStep("summary");
+        if (importResult.success) {
+          router.refresh();
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Bulk import failed unexpectedly."
+        );
+        setStep("confirm");
       }
     });
   }
